@@ -1,3 +1,5 @@
+--- up
+
 CREATE TABLE entry_contributors (
     entry_id INTEGER,
     user_id INTEGER,

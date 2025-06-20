@@ -1,3 +1,5 @@
+--- up
+
 CREATE TABLE entry (
     id SERIAL PRIMARY KEY,
     address VARCHAR(60) NOT NULL,

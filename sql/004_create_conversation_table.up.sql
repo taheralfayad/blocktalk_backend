@@ -1,3 +1,5 @@
+--- up
+
 CREATE TABLE conversation(
     id SERIAL PRIMARY KEY,
     user_id INTEGER,

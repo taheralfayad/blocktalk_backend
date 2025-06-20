@@ -1,18 +1,25 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
 
+	_ "github.com/lib/pq"
+
 	"github.com/gorilla/mux"
+
+	v1 "backend/api/v1"
 )
 
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
 }
+
+var db *sql.DB
 
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
@@ -37,12 +44,6 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func createEntry(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Entry Created")
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("Entry created successfully"))
-}
-
 func getEntry(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Entry Retrieved")
 	w.WriteHeader(http.StatusOK)
@@ -54,7 +55,10 @@ func handleRequests() {
 
 	myRouter.Use(loggingMiddleware)
 
-	myRouter.HandleFunc("/create-entry", createEntry).Methods("POST")
+	// myRouter.HandleFunc("/create-entry", createEntry).Methods("POST")
+	myRouter.HandleFunc("/create-user", func(w http.ResponseWriter, r *http.Request) {
+		v1.CreateUser(w, r, db)
+	}).Methods("POST")
 	myRouter.HandleFunc("/view-entry", getEntry).Methods("GET")
 
 	log.Println("Server starting on :8080")
@@ -62,5 +66,19 @@ func handleRequests() {
 }
 
 func main() {
+	db, err := initDB()
+
+	// retry connection to the database 10 times with a 2-second delay
+	for i := 0; i < 10 && err != nil; i++ {
+		log.Printf("Failed to connect to DB, attempt %d: %v", i+1, err)
+		time.Sleep(2 * time.Second)
+		err = db.Ping()
+	}
+
+	if err != nil {
+		log.Fatalf("Failed to connect to DB: %v", err)
+	}
+	defer db.Close()
+
 	handleRequests()
 }
