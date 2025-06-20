@@ -66,7 +66,8 @@ func handleRequests() {
 }
 
 func main() {
-	db, err := initDB()
+	var err error
+	db, err = initDB()
 
 	// retry connection to the database 10 times with a 2-second delay
 	for i := 0; i < 10 && err != nil; i++ {
