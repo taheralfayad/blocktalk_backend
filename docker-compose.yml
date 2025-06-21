@@ -8,8 +8,8 @@ services:
     command: ["air"]
     depends_on:
       - database
-    environment:
-      - DATABASE_URL=postgres://postgres:postgres@database:5432/postgres?sslmode=disable
+    env_file:
+      - .env
 
   database:
     image: postgis/postgis:15-3.3

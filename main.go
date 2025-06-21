@@ -11,7 +11,7 @@ import (
 
 	"github.com/gorilla/mux"
 
-	v1 "backend/api/v1"
+	users "backend/api/v1/users"
 )
 
 type responseWriter struct {
@@ -55,10 +55,20 @@ func handleRequests() {
 
 	myRouter.Use(loggingMiddleware)
 
-	// myRouter.HandleFunc("/create-entry", createEntry).Methods("POST")
+	// User API routes
 	myRouter.HandleFunc("/create-user", func(w http.ResponseWriter, r *http.Request) {
-		v1.CreateUser(w, r, db)
+		users.CreateUser(w, r, db)
 	}).Methods("POST")
+
+	myRouter.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		users.LoginUser(w, r, db)
+	}).Methods("POST")
+
+	myRouter.HandleFunc("/refresh-token", users.RefreshToken).Methods("POST")
+
+	// ========================
+
+	// Entry API routes
 	myRouter.HandleFunc("/view-entry", getEntry).Methods("GET")
 
 	log.Println("Server starting on :8080")
