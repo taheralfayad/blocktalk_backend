@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/lib/pq"
 
 	utils "backend/api/v1/utils"
 )
@@ -55,6 +58,21 @@ func CreateUser(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	`, payload.Username, payload.FirstName, payload.LastName, hashedPassword, payload.Email, payload.PhoneNumber)
 
 	if err != nil {
+		if err, ok := err.(*pq.Error); ok && err.Code == "23505" {
+			if err.Constraint == "users_username_key" {
+				http.Error(w, "Username already exists", http.StatusConflict)
+				return
+			}
+			if err.Constraint == "users_email_key" {
+				http.Error(w, "Email already exists", http.StatusConflict)
+				return
+			}
+			if err.Constraint == "users_phone_number_key" {
+				http.Error(w, "Phone number already exists", http.StatusConflict)
+				return
+			}
+		}
+
 		log.Printf("DB insert error: %v", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
@@ -103,7 +121,7 @@ func LoginUser(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	accessToken, err := utils.GenerateAccessToken(payload.Username)
+	accessToken, expirationDate, err := utils.GenerateAccessToken(payload.Username)
 	if err != nil {
 		http.Error(w, "Could not generate access token", http.StatusInternalServerError)
 		return
@@ -118,6 +136,7 @@ func LoginUser(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	tokens := map[string]string{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
+		"expires_at":    strconv.FormatInt(expirationDate, 10),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -130,6 +149,7 @@ func RefreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&payload)
+
 	if err != nil || payload.RefreshToken == "" {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
@@ -147,13 +167,16 @@ func RefreshToken(w http.ResponseWriter, r *http.Request) {
 	claims := token.Claims.(jwt.MapClaims)
 	username := claims["username"].(string)
 
-	newAccessToken, err := utils.GenerateAccessToken(username)
+	newAccessToken, expirationDate, err := utils.GenerateAccessToken(username)
 	if err != nil {
 		http.Error(w, "Failed to generate access token", http.StatusInternalServerError)
 		return
 	}
 
-	resp := map[string]string{"access_token": newAccessToken}
+	resp := map[string]string{
+		"access_token": newAccessToken,
+		"expires_at":   strconv.FormatInt(expirationDate, 10),
+	}
 	json.NewEncoder(w).Encode(resp)
 }
 
