@@ -9,9 +9,12 @@ import (
 
 	_ "github.com/lib/pq"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 
+	entry "backend/api/v1/entry"
 	users "backend/api/v1/users"
+	utils "backend/api/v1/utils"
 )
 
 type responseWriter struct {
@@ -44,6 +47,45 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func validateToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		fmt.Println("Validating token for request:", r.URL.Path)
+
+		skipPaths := map[string]bool{
+			"/create-user":   true,
+			"/login":         true,
+			"/refresh-token": true,
+		}
+
+		if skipPaths[r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		authToken := r.Header.Get("Authorization")
+
+		log.Printf("Received token: %s", authToken)
+
+		if authToken == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		token, err := jwt.Parse(authToken, func(token *jwt.Token) (interface{}, error) {
+			return utils.JwtSecret, nil
+		})
+
+		if err != nil || !token.Valid {
+			log.Printf("Invalid token: %v", err)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func getEntry(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Entry Retrieved")
 	w.WriteHeader(http.StatusOK)
@@ -54,6 +96,7 @@ func handleRequests() {
 	myRouter := mux.NewRouter().StrictSlash(true)
 
 	myRouter.Use(loggingMiddleware)
+	myRouter.Use(validateToken)
 
 	// User API routes
 	myRouter.HandleFunc("/create-user", func(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +113,10 @@ func handleRequests() {
 
 	// Entry API routes
 	myRouter.HandleFunc("/view-entry", getEntry).Methods("GET")
+	myRouter.HandleFunc("/create-entry", func(w http.ResponseWriter, r *http.Request) {
+		entry.CreateEntry(w, r, db)
+	}).Methods("POST")
+	myRouter.HandleFunc("/autocomplete-address", entry.AutocompleteAddress).Methods("GET")
 
 	log.Println("Server starting on :8080")
 	log.Fatal(http.ListenAndServe(":8080", myRouter))
