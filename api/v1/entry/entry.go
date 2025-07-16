@@ -222,3 +222,101 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Entry created successfully"))
 }
+
+func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	type Bounds struct {
+		North float64 `json:"north"`
+		South float64 `json:"south"`
+		East  float64 `json:"east"`
+		West  float64 `json:"west"`
+	}
+
+	var bounds Bounds
+
+	err := json.NewDecoder(r.Body).Decode(&bounds)
+
+	fmt.Println("Received bounds:", bounds)
+
+	if err != nil {
+		fmt.Println("Error decoding request body:", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := db.Query(`
+		SELECT id, address, content, upvotes, downvotes, views, date_created, creator_id,
+			ST_X(location::geometry) AS longitude,
+			ST_Y(location::geometry) AS latitude
+		FROM entry
+		WHERE location::geometry && ST_MakeEnvelope($1, $2, $3, $4, 4326)
+	`,
+		bounds.West,
+		bounds.South,
+		bounds.East,
+		bounds.North,
+	)
+
+	if err != nil {
+		fmt.Println("Query error:", err)
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type Entry struct {
+		ID          int     `json:"id"`
+		Address     string  `json:"address"`
+		Content     string  `json:"content"`
+		Upvotes     int     `json:"upvotes"`
+		Downvotes   int     `json:"downvotes"`
+		Views       int     `json:"views"`
+		DateCreated string  `json:"date_created"`
+		CreatorID   int     `json:"creator_id"`
+		Longitude   float64 `json:"longitude"`
+		Latitude    float64 `json:"latitude"`
+	}
+
+	var entries []Entry
+
+	for rows.Next() {
+		var entry Entry
+		err := rows.Scan(&entry.ID,
+			&entry.Address,
+			&entry.Content,
+			&entry.Upvotes,
+			&entry.Downvotes,
+			&entry.Views,
+			&entry.DateCreated,
+			&entry.CreatorID,
+			&entry.Longitude,
+			&entry.Latitude)
+		if err != nil {
+			fmt.Println("Row scan error:", err)
+			http.Error(w, "Failed to read entry data", http.StatusInternalServerError)
+			return
+		}
+		entries = append(entries, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		fmt.Println("Row iteration error:", err)
+		http.Error(w, "Failed to read entries", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if len(entries) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	err = json.NewEncoder(w).Encode(entries)
+
+	if err != nil {
+		fmt.Println("Error encoding response:", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+}

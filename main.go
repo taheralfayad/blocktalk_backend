@@ -86,12 +86,6 @@ func validateToken(next http.Handler) http.Handler {
 	})
 }
 
-func getEntry(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Entry Retrieved")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Flip the switch on em"))
-}
-
 func handleRequests() {
 	myRouter := mux.NewRouter().StrictSlash(true)
 
@@ -112,7 +106,9 @@ func handleRequests() {
 	// ========================
 
 	// Entry API routes
-	myRouter.HandleFunc("/view-entry", getEntry).Methods("GET")
+	myRouter.HandleFunc("/retrieve-entries-within-visible-bounds", func(w http.ResponseWriter, r *http.Request) {
+		entry.RetrieveEntriesWithinVisibleBounds(w, r, db)
+	}).Methods("POST")
 	myRouter.HandleFunc("/create-entry", func(w http.ResponseWriter, r *http.Request) {
 		entry.CreateEntry(w, r, db)
 	}).Methods("POST")

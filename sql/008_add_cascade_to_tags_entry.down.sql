@@ -5,6 +5,6 @@ ALTER TABLE tags_entry
 
 ALTER TABLE tags_entry
     ADD CONSTRAINT tags_entry_entry_id_fkey
-        FOREIGN KEY (entry_id) REFERENCES entry(id),       -- default = NO ACTION
+        FOREIGN KEY (entry_id) REFERENCES entry(id),
     ADD CONSTRAINT tags_entry_tag_id_fkey
         FOREIGN KEY (tag_id)  REFERENCES tags(id);  

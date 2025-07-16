@@ -78,8 +78,36 @@ func CreateUser(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
+	accessToken, expirationDate, err := utils.GenerateAccessToken(payload.Username)
+
+	if err != nil {
+		log.Printf("Error generating access token: %v", err)
+		http.Error(w, "Error authenticating user", http.StatusInternalServerError)
+		return
+	}
+
+	refreshToken, err := utils.GenerateRefreshToken(payload.Username)
+
+	if err != nil {
+		log.Printf("Error generating refresh token: %v", err)
+		http.Error(w, "Error authenticating user", http.StatusInternalServerError)
+		return
+	}
+
+	tokens := map[string]string{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"expires_at":    strconv.FormatInt(expirationDate, 10),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("User created successfully"))
+
+	if err := json.NewEncoder(w).Encode(tokens); err != nil {
+		log.Printf("Error encoding response: %v", err)
+		http.Error(w, "Error generating response", http.StatusInternalServerError)
+		return
+	}
 }
 
 func LoginUser(w http.ResponseWriter, r *http.Request, db *sql.DB) {
