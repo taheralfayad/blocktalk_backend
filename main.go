@@ -53,9 +53,12 @@ func validateToken(next http.Handler) http.Handler {
 		fmt.Println("Validating token for request:", r.URL.Path)
 
 		skipPaths := map[string]bool{
-			"/create-user":   true,
-			"/login":         true,
-			"/refresh-token": true,
+			"/create-user":    true,
+			"/login":          true,
+			"/refresh-token":  true,
+			"/feed":           true,
+			"/retrieve-city":  true,
+			"/retrieve-entry": true,
 		}
 
 		if skipPaths[r.URL.Path] {
@@ -113,6 +116,13 @@ func handleRequests() {
 		entry.CreateEntry(w, r, db)
 	}).Methods("POST")
 	myRouter.HandleFunc("/autocomplete-address", entry.AutocompleteAddress).Methods("GET")
+	myRouter.HandleFunc("/retrieve-city", entry.RetrieveCity).Methods("GET")
+	myRouter.HandleFunc("/feed", func(w http.ResponseWriter, r *http.Request) {
+		entry.RetrieveFeed(w, r, db)
+	}).Methods("GET")
+	myRouter.HandleFunc("/retrieve-entry", func(w http.ResponseWriter, r *http.Request) {
+		entry.RetrieveEntry(w, r, db)
+	}).Methods("GET")
 
 	log.Println("Server starting on :8080")
 	log.Fatal(http.ListenAndServe(":8080", myRouter))

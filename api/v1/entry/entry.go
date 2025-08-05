@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/lithammer/fuzzysearch/fuzzy"
 )
 
 type CreateEntryRequest struct {
@@ -21,6 +22,41 @@ type CreateEntryRequest struct {
 	Longitude   float64  `json:"longitude"`
 	Tags        []string `json:"tags"`
 	Description string   `json:"description"`
+}
+
+type City struct {
+	Name         string  `json:"city"`
+	StateId      string  `json:"state_id"`
+	StateName    string  `json:"state_name"`
+	CountyFips   int     `json:"county_fips"`
+	CountyName   string  `json:"county_name"`
+	Latitude     float64 `json:"lat"`
+	Longitude    float64 `json:"lng"`
+	CityAscii    string  `json:"city_ascii"`
+	Population   int     `json:"population"`
+	Density      float64 `json:"density"`
+	Timezone     string  `json:"timezone"`
+	Ranking      int     `json:"ranking"`
+	Id           int     `json:"id"`
+	Source       string  `json:"source"`
+	Military     bool    `json:"military"`
+	Incorporated bool    `json:"incorporated"`
+}
+
+type Entry struct {
+	ID          int     `json:"id"`
+	Title       string  `json:"title"`
+	Address     string  `json:"address"`
+	Content     string  `json:"content"`
+	Upvotes     int     `json:"upvotes"`
+	Downvotes   int     `json:"downvotes"`
+	Views       int     `json:"views"`
+	DateCreated string  `json:"date_created"`
+	Username    string  `json:"username"`
+	FirstName   string  `json:"first_name"`
+	LastName    string  `json:"last_name"`
+	Longitude   float64 `json:"longitude"`
+	Latitude    float64 `json:"latitude"`
 }
 
 func AutocompleteAddress(w http.ResponseWriter, r *http.Request) {
@@ -244,10 +280,11 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 	}
 
 	rows, err := db.Query(`
-		SELECT id, address, content, upvotes, downvotes, views, date_created, creator_id,
+		SELECT entry.id, address, content, upvotes, downvotes, views, date_created, username, first_name, last_name,
 			ST_X(location::geometry) AS longitude,
 			ST_Y(location::geometry) AS latitude
 		FROM entry
+		JOIN users ON entry.creator_id = users.id
 		WHERE location::geometry && ST_MakeEnvelope($1, $2, $3, $4, 4326)
 	`,
 		bounds.West,
@@ -263,19 +300,6 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 	}
 	defer rows.Close()
 
-	type Entry struct {
-		ID          int     `json:"id"`
-		Address     string  `json:"address"`
-		Content     string  `json:"content"`
-		Upvotes     int     `json:"upvotes"`
-		Downvotes   int     `json:"downvotes"`
-		Views       int     `json:"views"`
-		DateCreated string  `json:"date_created"`
-		CreatorID   int     `json:"creator_id"`
-		Longitude   float64 `json:"longitude"`
-		Latitude    float64 `json:"latitude"`
-	}
-
 	var entries []Entry
 
 	for rows.Next() {
@@ -287,7 +311,9 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 			&entry.Downvotes,
 			&entry.Views,
 			&entry.DateCreated,
-			&entry.CreatorID,
+			&entry.Username,
+			&entry.FirstName,
+			&entry.LastName,
 			&entry.Longitude,
 			&entry.Latitude)
 		if err != nil {
@@ -319,4 +345,238 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+}
+
+func RetrieveCity(w http.ResponseWriter, r *http.Request) {
+	var cities []City
+
+	jsonFile, err := os.Open("/app/static/us_cities.json")
+
+	if err != nil {
+		fmt.Println(err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	defer jsonFile.Close()
+
+	byteValue, _ := io.ReadAll(jsonFile)
+
+	err = json.Unmarshal(byteValue, &cities)
+
+	if err != nil {
+		fmt.Println("Error unmarshalling JSON:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	query := r.URL.Query().Get("city")
+
+	fmt.Println("Received query for city:", query)
+
+	var cityNames []string
+
+	for _, city := range cities {
+		cityNames = append(cityNames, city.Name)
+	}
+
+	matches := fuzzy.RankFind(query, cityNames)
+
+	if len(matches) > 3 {
+		matches = matches[:3] // Limit to top 3 matches
+	}
+
+	var results []string
+
+	for _, match := range matches {
+		results = append(results, match.Target)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if len(results) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	err = json.NewEncoder(w).Encode(results)
+
+	if err != nil {
+		fmt.Println("Error encoding response:", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+}
+
+func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	location := r.URL.Query().Get("location")
+	distance := r.URL.Query().Get("distance")
+
+	fmt.Println("Received distance:", distance)
+
+	jsonFile, err := os.Open("/app/static/us_cities.json")
+
+	if err != nil {
+		fmt.Println("Error opening JSON file:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	defer jsonFile.Close()
+
+	byteValue, _ := io.ReadAll(jsonFile)
+
+	var cities []City
+
+	err = json.Unmarshal(byteValue, &cities)
+
+	if err != nil {
+		fmt.Println("Error unmarshalling JSON:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	var city City
+
+	for _, c := range cities {
+		if c.Name == location {
+			city = c
+			break
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if city.Name == "" {
+		fmt.Println("City not found:", location)
+		http.Error(w, "City not found", http.StatusNotFound)
+		return
+	}
+
+	rows, err := db.Query(`
+		SELECT entry.id as id, address, content, upvotes, downvotes, views, date_created,
+			username, first_name, last_name,
+			ST_X(location::geometry) AS longitude,
+			ST_Y(location::geometry) AS latitude
+		FROM entry
+		JOIN users ON entry.creator_id = users.id
+		WHERE ST_DWithin(
+			location,
+			ST_MakePoint($1, $2)::geography,
+			$3 * 1609.34
+		)
+	`, city.Longitude, city.Latitude, distance)
+
+	if err != nil {
+		fmt.Println("Query error:", err)
+		http.Error(w, "Database query failed", http.StatusInternalServerError)
+		return
+	}
+
+	defer rows.Close()
+
+	var entries []Entry
+
+	for rows.Next() {
+		fmt.Println("scanning row")
+		var entry Entry
+		err := rows.Scan(&entry.ID,
+			&entry.Address,
+			&entry.Content,
+			&entry.Upvotes,
+			&entry.Downvotes,
+			&entry.Views,
+			&entry.DateCreated,
+			&entry.Username,
+			&entry.FirstName,
+			&entry.LastName,
+			&entry.Longitude,
+			&entry.Latitude)
+		if err != nil {
+			fmt.Println("Row scan error:", err)
+			http.Error(w, "Failed to read entry data", http.StatusInternalServerError)
+			return
+		}
+		entries = append(entries, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		fmt.Println("Row iteration error:", err)
+		http.Error(w, "Failed to read entries", http.StatusInternalServerError)
+		return
+	}
+
+	if len(entries) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	fmt.Println(entries)
+
+	err = json.NewEncoder(w).Encode(entries)
+
+	if err != nil {
+		fmt.Println("Error encoding response:", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Println("Feed entries sent successfully")
+}
+
+func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	entryID := r.URL.Query().Get("id")
+
+	if entryID == "" {
+		http.Error(w, "Entry ID is required", http.StatusBadRequest)
+		return
+	}
+
+	var entry Entry
+
+	err := db.QueryRow(`
+		SELECT entry.id, address, content, upvotes, downvotes, views, date_created,
+			username, first_name, last_name, title,
+			ST_X(location::geometry) AS longitude,
+			ST_Y(location::geometry) AS latitude
+		FROM entry
+		JOIN users ON entry.creator_id = users.id
+		WHERE entry.id = $1
+	`, entryID).Scan(&entry.ID,
+		&entry.Address,
+		&entry.Content,
+		&entry.Upvotes,
+		&entry.Downvotes,
+		&entry.Views,
+		&entry.DateCreated,
+		&entry.Username,
+		&entry.FirstName,
+		&entry.LastName,
+		&entry.Title,
+		&entry.Longitude,
+		&entry.Latitude)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Entry not found", http.StatusNotFound)
+			return
+		}
+		fmt.Println("DB query error:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	err = json.NewEncoder(w).Encode(entry)
+
+	if err != nil {
+		fmt.Println("Error encoding response:", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Println("Entry retrieved successfully")
 }
