@@ -43,20 +43,34 @@ type City struct {
 	Incorporated bool    `json:"incorporated"`
 }
 
+type Comment struct {
+	ID        int    `json:"id"`
+	EntryID   int    `json:"entry_id"`
+	UserID    int    `json:"user_id"`
+	ParentID  *int   `json:"parent_id,omitempty"`
+	Context   string `json:"context"`
+	Upvotes   int    `json:"upvotes"`
+	Downvotes int    `json:"downvotes"`
+	Type      string `json:"type"`
+}
+
 type Entry struct {
-	ID          int     `json:"id"`
-	Title       string  `json:"title"`
-	Address     string  `json:"address"`
-	Content     string  `json:"content"`
-	Upvotes     int     `json:"upvotes"`
-	Downvotes   int     `json:"downvotes"`
-	Views       int     `json:"views"`
-	DateCreated string  `json:"date_created"`
-	Username    string  `json:"username"`
-	FirstName   string  `json:"first_name"`
-	LastName    string  `json:"last_name"`
-	Longitude   float64 `json:"longitude"`
-	Latitude    float64 `json:"latitude"`
+	ID               int       `json:"id"`
+	Title            string    `json:"title"`
+	Address          string    `json:"address"`
+	Content          string    `json:"content"`
+	Upvotes          int       `json:"upvotes"`
+	Downvotes        int       `json:"downvotes"`
+	NumberOfComments int       `json:"number_of_comments"`
+	Views            int       `json:"views"`
+	DateCreated      string    `json:"date_created"`
+	Username         string    `json:"username"`
+	FirstName        string    `json:"first_name"`
+	LastName         string    `json:"last_name"`
+	Longitude        float64   `json:"longitude"`
+	Latitude         float64   `json:"latitude"`
+	Tags             []string  `json:"tags,omitempty"`
+	Comments         []Comment `json:"comments,omitempty"`
 }
 
 func AutocompleteAddress(w http.ResponseWriter, r *http.Request) {
@@ -211,15 +225,18 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	fmt.Println("User ID:", userID)
 
-	tagInDatabase := ""
+	tagsInDatabase := []string{}
 
 	for _, tag := range payload.Tags {
+		var tmp string
 		err = db.QueryRow(`
 			INSERT INTO tags (name) 
 			VALUES ($1) 
 			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name 
 			RETURNING name
-		`, tag).Scan(&tagInDatabase) // Functions as a "get or create" for tags
+		`, tag).Scan(&tmp) // Functions as a "get or create" for tags
+
+		tagsInDatabase = append(tagsInDatabase, tmp)
 
 		if err != nil {
 			fmt.Println("DB insert error for tags:", err)
@@ -227,7 +244,6 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			return
 		}
 
-		print("Tag in database:", tagInDatabase)
 	}
 
 	entryID := 0
@@ -244,15 +260,16 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	_, err = db.Exec(`
-		INSERT INTO tags_entry (entry_id, tag_id)
-		SELECT $1, id FROM tags WHERE name = $2
-	`, entryID, tagInDatabase)
-
-	if err != nil {
-		fmt.Println("DB insert error for entry_tags:", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+	for _, tagInDatabase := range tagsInDatabase {
+		_, err = db.Exec(`
+			INSERT INTO tags_entry (entry_id, tag_id)
+			SELECT $1, id FROM tags WHERE name = $2
+		`, entryID, tagInDatabase)
+		if err != nil {
+			fmt.Println("DB insert error for entry_tags:", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -280,7 +297,7 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 	}
 
 	rows, err := db.Query(`
-		SELECT entry.id, address, content, upvotes, downvotes, views, date_created, username, first_name, last_name,
+		SELECT entry.id, address, content, views, date_created, username, first_name, last_name,
 			ST_X(location::geometry) AS longitude,
 			ST_Y(location::geometry) AS latitude
 		FROM entry
@@ -307,8 +324,6 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 		err := rows.Scan(&entry.ID,
 			&entry.Address,
 			&entry.Content,
-			&entry.Upvotes,
-			&entry.Downvotes,
 			&entry.Views,
 			&entry.DateCreated,
 			&entry.Username,
@@ -457,7 +472,7 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 
 	rows, err := db.Query(`
-		SELECT entry.id as id, address, content, upvotes, downvotes, views, date_created,
+		SELECT entry.id as id, address, content, views, date_created,
 			username, first_name, last_name,
 			ST_X(location::geometry) AS longitude,
 			ST_Y(location::geometry) AS latitude
@@ -481,13 +496,12 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var entries []Entry
 
 	for rows.Next() {
-		fmt.Println("scanning row")
+		var numberOfComments int
+
 		var entry Entry
 		err := rows.Scan(&entry.ID,
 			&entry.Address,
 			&entry.Content,
-			&entry.Upvotes,
-			&entry.Downvotes,
 			&entry.Views,
 			&entry.DateCreated,
 			&entry.Username,
@@ -500,6 +514,21 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			http.Error(w, "Failed to read entry data", http.StatusInternalServerError)
 			return
 		}
+
+		err = db.QueryRow(`
+			SELECT COUNT(*)
+			FROM conversation
+			WHERE entry_id = $1
+		`, entry.ID).Scan(&numberOfComments)
+
+		if err != nil {
+			fmt.Println("DB query error for number of comments:", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		entry.NumberOfComments = numberOfComments
+
 		entries = append(entries, entry)
 	}
 
@@ -507,6 +536,37 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		fmt.Println("Row iteration error:", err)
 		http.Error(w, "Failed to read entries", http.StatusInternalServerError)
 		return
+	}
+
+	for i, entry := range entries {
+		var upvotes, downvotes int
+
+		err = db.QueryRow(`
+			SELECT COUNT(*) as number_of_upvotes
+			FROM entry_interactions
+			WHERE entry_id = $1 AND interaction_type = 'upvote'
+		`, entry.ID).Scan(&upvotes)
+
+		if err != nil {
+			fmt.Println("DB query error for upvotes:", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		err = db.QueryRow(`
+			SELECT COUNT(*) as number_of_downvotes
+			FROM entry_interactions
+			WHERE entry_id = $1 AND interaction_type = 'downvote'
+		`, entry.ID).Scan(&downvotes)
+
+		if err != nil {
+			fmt.Println("DB query error for downvotes:", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+
+		entries[i].Upvotes = upvotes
+		entries[i].Downvotes = downvotes
 	}
 
 	if len(entries) == 0 {
@@ -538,7 +598,7 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var entry Entry
 
 	err := db.QueryRow(`
-		SELECT entry.id, address, content, upvotes, downvotes, views, date_created,
+		SELECT entry.id, address, content, views, date_created,
 			username, first_name, last_name, title,
 			ST_X(location::geometry) AS longitude,
 			ST_Y(location::geometry) AS latitude
@@ -548,8 +608,6 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	`, entryID).Scan(&entry.ID,
 		&entry.Address,
 		&entry.Content,
-		&entry.Upvotes,
-		&entry.Downvotes,
 		&entry.Views,
 		&entry.DateCreated,
 		&entry.Username,
@@ -569,6 +627,71 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
+	var tags []string
+
+	rows, err := db.Query(`
+		SELECT tags.name
+		FROM tags
+		JOIN tags_entry ON tags.id = tags_entry.tag_id
+		WHERE tags_entry.entry_id = $1
+	`, entry.ID)
+
+	if err != nil {
+		fmt.Println("DB query error for tags:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var tag string
+		err := rows.Scan(&tag)
+		if err != nil {
+			fmt.Println("Row scan error for tags:", err)
+			http.Error(w, "Failed to read tags", http.StatusInternalServerError)
+			return
+		}
+		tags = append(tags, tag)
+	}
+
+	entry.Tags = tags
+
+	var upvotes, downvotes int
+
+	err = db.QueryRow(`
+		SELECT COUNT(*) as number_of_upvotes
+		FROM entry_interactions
+		WHERE entry_id = $1 AND interaction_type = 'upvote'
+	`, entry.ID).Scan(&upvotes)
+
+	if err != nil {
+		fmt.Println("DB query error for upvotes:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	err = db.QueryRow(`
+		SELECT COUNT(*) as number_of_downvotes
+		FROM entry_interactions
+		WHERE entry_id = $1 AND interaction_type = 'downvote'
+	`, entry.ID).Scan(&downvotes)
+
+	if err != nil {
+		fmt.Println("DB query error for downvotes:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	entry.Upvotes = upvotes
+	entry.Downvotes = downvotes
+
+	if err != nil {
+		fmt.Println("DB query error for downvotes:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(entry)
 
@@ -579,4 +702,140 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 
 	fmt.Println("Entry retrieved successfully")
+}
+
+func VoteEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	token, err := jwt.Parse(r.Header.Get("Authorization"), func(token *jwt.Token) (interface{}, error) {
+		return utils.JwtSecret, nil
+	})
+
+	if err != nil || !token.Valid {
+		fmt.Println("Invalid token:", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	claims := token.Claims.(jwt.MapClaims)
+
+	username := claims["username"].(string)
+
+	userID := 0
+
+	err = db.QueryRow(`
+		SELECT id FROM users WHERE username = $1
+	`, username).Scan(&userID)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "User not found", http.StatusUnauthorized)
+			return
+		}
+		fmt.Println("DB query error:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	type UpvoteRequest struct {
+		EntryID         string `json:"entry_id"`
+		InteractionType string `json:"interaction_type"`
+	}
+
+	var req UpvoteRequest
+
+	err = json.NewDecoder(r.Body).Decode(&req)
+
+	if err != nil {
+		fmt.Println("Error decoding request body:", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.EntryID == "" || req.InteractionType == "" {
+		http.Error(w, "Entry ID and interaction type are required", http.StatusBadRequest)
+		return
+	}
+
+	entryID := req.EntryID
+
+	if entryID == "" {
+		http.Error(w, "Entry ID is required", http.StatusBadRequest)
+		return
+	}
+
+	var currentInteraction string
+
+	err = db.QueryRow(`
+		SELECT interaction_type
+		FROM entry_interactions
+		WHERE user_id = $1 AND entry_id = $2
+	`, userID, entryID).Scan(&currentInteraction)
+
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Println("DB query error:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if currentInteraction == req.InteractionType {
+		_, err = db.Exec(`
+			DELETE FROM entry_interactions 
+			WHERE user_id = $1 AND entry_id = $2
+		`, userID, entryID)
+	} else if currentInteraction != "" {
+		_, err = db.Exec(`
+			UPDATE entry_interactions
+			SET interaction_type = $3, created_at = CURRENT_TIMESTAMP
+			WHERE user_id = $1 AND entry_id = $2
+		`, userID, entryID, req.InteractionType)
+	} else {
+		_, err = db.Exec(`
+			INSERT INTO entry_interactions (entry_id, user_id, interaction_type)
+			VALUES ($1, $2, $3)
+		`, entryID, userID, req.InteractionType)
+	}
+
+	if err != nil {
+		fmt.Println("DB exec error:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	var upvotes int
+	var downvotes int
+
+	err = db.QueryRow(`
+		SELECT COUNT(*) as number_of_upvotes
+		FROM entry_interactions
+		WHERE entry_id = $1 AND interaction_type = 'upvote'
+	`, entryID).Scan(&upvotes)
+
+	if err != nil {
+		fmt.Println("DB query error for upvotes:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	err = db.QueryRow(`
+		SELECT COUNT(*) as number_of_downvotes
+		FROM entry_interactions
+		WHERE entry_id = $1 AND interaction_type = 'downvote'
+	`, entryID).Scan(&downvotes)
+
+	if err != nil {
+		fmt.Println("DB query error for downvotes:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	err = json.NewEncoder(w).Encode(map[string]int{"upvotes": upvotes, "downvotes": downvotes})
+
+	if err != nil {
+		fmt.Println("Error encoding response:", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Println("Upvote interaction processed successfully")
+
 }

@@ -123,6 +123,9 @@ func handleRequests() {
 	myRouter.HandleFunc("/retrieve-entry", func(w http.ResponseWriter, r *http.Request) {
 		entry.RetrieveEntry(w, r, db)
 	}).Methods("GET")
+	myRouter.HandleFunc("/vote-entry", func(w http.ResponseWriter, r *http.Request) {
+		entry.VoteEntry(w, r, db)
+	}).Methods("POST")
 
 	log.Println("Server starting on :8080")
 	log.Fatal(http.ListenAndServe(":8080", myRouter))
