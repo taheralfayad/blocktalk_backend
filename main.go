@@ -12,6 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 
+	comments "backend/api/v1/comments"
 	entry "backend/api/v1/entry"
 	users "backend/api/v1/users"
 	utils "backend/api/v1/utils"
@@ -53,12 +54,14 @@ func validateToken(next http.Handler) http.Handler {
 		fmt.Println("Validating token for request:", r.URL.Path)
 
 		skipPaths := map[string]bool{
-			"/create-user":    true,
-			"/login":          true,
-			"/refresh-token":  true,
-			"/feed":           true,
-			"/retrieve-city":  true,
-			"/retrieve-entry": true,
+			"/create-user":              true,
+			"/login":                    true,
+			"/refresh-token":            true,
+			"/feed":                     true,
+			"/retrieve-city":            true,
+			"/retrieve-entry":           true,
+			"/retrieve-comments":        true,
+			"/retrieve-comment-replies": true,
 		}
 
 		if skipPaths[r.URL.Path] {
@@ -127,8 +130,22 @@ func handleRequests() {
 		entry.VoteEntry(w, r, db)
 	}).Methods("POST")
 
+	// =========================
+
+	// Comment API routes
+	myRouter.HandleFunc("/add-comment", func(w http.ResponseWriter, r *http.Request) {
+		comments.AddComment(w, r, db)
+	}).Methods("POST")
+	myRouter.HandleFunc("/retrieve-comments", func(w http.ResponseWriter, r *http.Request) {
+		comments.GetEntryComments(w, r, db)
+	}).Methods("GET")
+	myRouter.HandleFunc("/retrieve-comment-replies", func(w http.ResponseWriter, r *http.Request) {
+		comments.GetCommentReplies(w, r, db)
+	}).Methods("GET")
+
 	log.Println("Server starting on :8080")
 	log.Fatal(http.ListenAndServe(":8080", myRouter))
+
 }
 
 func main() {

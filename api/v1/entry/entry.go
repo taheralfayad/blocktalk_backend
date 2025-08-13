@@ -71,6 +71,7 @@ type Entry struct {
 	Latitude         float64   `json:"latitude"`
 	Tags             []string  `json:"tags,omitempty"`
 	Comments         []Comment `json:"comments,omitempty"`
+	UserInteraction  string    `json:"user_interaction,omitempty"`
 }
 
 func AutocompleteAddress(w http.ResponseWriter, r *http.Request) {
@@ -595,9 +596,22 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
+	token, err := jwt.Parse(r.Header.Get("Authorization"), func(token *jwt.Token) (interface{}, error) {
+		return utils.JwtSecret, nil
+	})
+
+	var username string
+
+	if err != nil || !token.Valid {
+		fmt.Println("No user is logged in")
+	} else {
+		claims := token.Claims.(jwt.MapClaims)
+		username = claims["username"].(string)
+	}
+
 	var entry Entry
 
-	err := db.QueryRow(`
+	err = db.QueryRow(`
 		SELECT entry.id, address, content, views, date_created,
 			username, first_name, last_name, title,
 			ST_X(location::geometry) AS longitude,
@@ -683,14 +697,23 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	entry.Upvotes = upvotes
-	entry.Downvotes = downvotes
+	err = db.QueryRow(`
+		SELECT interaction_type
+		FROM entry_interactions
+		WHERE user_id = (SELECT id FROM users WHERE username = $1) AND entry_id
+		= $2
+	`, username, entry.ID).Scan(&entry.UserInteraction)
 
-	if err != nil {
-		fmt.Println("DB query error for downvotes:", err)
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Println("DB query error for user interaction:", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+
+	entry.Upvotes = upvotes
+	entry.Downvotes = downvotes
+
+	fmt.Println(entry.UserInteraction)
 
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(entry)
@@ -800,6 +823,20 @@ func VoteEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
+	var updatedInteractionType string
+	err = db.QueryRow(`
+			SELECT interaction_type
+			FROM entry_interactions
+			WHERE user_id = $1 AND entry_id = $2
+		`, userID, entryID).Scan(&updatedInteractionType)
+	if err == sql.ErrNoRows {
+		updatedInteractionType = ""
+	} else if err != nil {
+		fmt.Println("DB query error for updated interaction type:", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
 	var upvotes int
 	var downvotes int
 
@@ -828,7 +865,20 @@ func VoteEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	err = json.NewEncoder(w).Encode(map[string]int{"upvotes": upvotes, "downvotes": downvotes})
+
+	type VoteResponse struct {
+		Upvotes         int    `json:"upvotes"`
+		Downvotes       int    `json:"downvotes"`
+		UserInteraction string `json:"user_interaction"`
+	}
+
+	response := VoteResponse{
+		Upvotes:         upvotes,
+		Downvotes:       downvotes,
+		UserInteraction: updatedInteractionType,
+	}
+
+	err = json.NewEncoder(w).Encode(response)
 
 	if err != nil {
 		fmt.Println("Error encoding response:", err)
