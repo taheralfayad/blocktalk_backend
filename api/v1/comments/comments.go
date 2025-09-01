@@ -108,6 +108,7 @@ func GetEntryComments(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	`, entryID)
 
 	if err != nil {
+		print(err)
 		http.Error(w, "Failed to retrieve comments", http.StatusInternalServerError)
 		return
 	}

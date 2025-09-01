@@ -16,12 +16,12 @@ import (
 )
 
 type CreateEntryRequest struct {
-	Title       string   `json:"title"`
-	Location    string   `json:"location"`
-	Latitude    float64  `json:"latitude"`
-	Longitude   float64  `json:"longitude"`
-	Tags        []string `json:"tags"`
-	Description string   `json:"description"`
+	Title       string  `json:"title"`
+	Location    string  `json:"location"`
+	Latitude    float64 `json:"latitude"`
+	Longitude   float64 `json:"longitude"`
+	Tags        []Tag   `json:"tags"`
+	Description string  `json:"description"`
 }
 
 type City struct {
@@ -54,6 +54,11 @@ type Comment struct {
 	Type      string `json:"type"`
 }
 
+type Tag struct {
+	Name           string `json:"name"`
+	Classification string `json:"classification"`
+}
+
 type Entry struct {
 	ID               int       `json:"id"`
 	Title            string    `json:"title"`
@@ -69,7 +74,7 @@ type Entry struct {
 	LastName         string    `json:"last_name"`
 	Longitude        float64   `json:"longitude"`
 	Latitude         float64   `json:"latitude"`
-	Tags             []string  `json:"tags,omitempty"`
+	Tags             []Tag     `json:"tags,omitempty"`
 	Comments         []Comment `json:"comments,omitempty"`
 	UserInteraction  string    `json:"user_interaction,omitempty"`
 }
@@ -231,11 +236,11 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	for _, tag := range payload.Tags {
 		var tmp string
 		err = db.QueryRow(`
-			INSERT INTO tags (name) 
-			VALUES ($1) 
-			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name 
+			INSERT INTO tags (name, classification) 
+			VALUES ($1, $2) 
+			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name, classification = EXCLUDED.classification
 			RETURNING name
-		`, tag).Scan(&tmp) // Functions as a "get or create" for tags
+		`, tag.Name, tag.Classification).Scan(&tmp) // Functions as a "get or create" for tags
 
 		tagsInDatabase = append(tagsInDatabase, tmp)
 
@@ -250,10 +255,18 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	entryID := 0
 
 	err = db.QueryRow(`
-		INSERT INTO entry (title, address, content, creator_id, location) 
-		VALUES ($1, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326))
-		RETURNING id
-		`, payload.Title, payload.Location, payload.Description, userID, payload.Longitude, payload.Latitude).Scan(&entryID)
+		WITH entry_insert AS (
+			INSERT INTO entry (title, address, creator_id, location) 
+			VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326))
+			RETURNING id
+		),
+		revision_number AS (
+			SELECT COUNT(*) + 1 AS revision_number FROM entry_revision WHERE entry_id = (SELECT id FROM entry_insert)
+		)
+		INSERT INTO entry_revision (entry_id, content, revision_number, creator_id)
+		SELECT (SELECT id FROM entry_insert), $6, (SELECT revision_number FROM revision_number), $3
+		RETURNING (SELECT id FROM entry_insert)	
+		`, payload.Title, payload.Location, userID, payload.Longitude, payload.Latitude, payload.Description).Scan(&entryID)
 
 	if err != nil {
 		fmt.Println("DB insert error:", err)
@@ -298,11 +311,23 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 	}
 
 	rows, err := db.Query(`
-		SELECT entry.id, address, content, views, date_created, username, first_name, last_name,
-			ST_X(location::geometry) AS longitude,
-			ST_Y(location::geometry) AS latitude
+		SELECT entry.id,
+			   address, 
+			   er.content, 
+			   views, 
+			   date_created, 
+			   username, 
+			   first_name, 
+			   last_name,
+			   ST_X(location::geometry) AS longitude,
+			   ST_Y(location::geometry) AS latitude
 		FROM entry
 		JOIN users ON entry.creator_id = users.id
+		JOIN (
+			SELECT DISTINCT ON (entry_id) entry_id, content, revision_number
+			FROM entry_revision
+			ORDER BY entry_id, revision_number DESC
+		) er ON entry.id = er.entry_id
 		WHERE location::geometry && ST_MakeEnvelope($1, $2, $3, $4, 4326)
 	`,
 		bounds.West,
@@ -473,17 +498,30 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 
 	rows, err := db.Query(`
-		SELECT entry.id as id, address, content, views, date_created,
-			username, first_name, last_name,
-			ST_X(location::geometry) AS longitude,
-			ST_Y(location::geometry) AS latitude
-		FROM entry
-		JOIN users ON entry.creator_id = users.id
+		SELECT e.id AS id,
+			e.address,
+			e.title,
+			er.content,
+			e.views,
+			e.date_created,
+			u.username,
+			u.first_name,
+			u.last_name,
+			ST_X(e.location::geometry) AS longitude,
+			ST_Y(e.location::geometry) AS latitude
+		FROM entry e
+		JOIN users u ON e.creator_id = u.id
+		JOIN (
+			SELECT DISTINCT ON (entry_id) entry_id, content, revision_number, date_created
+			FROM entry_revision
+			ORDER BY entry_id, revision_number DESC
+		) er ON e.id = er.entry_id
 		WHERE ST_DWithin(
-			location,
+			e.location,
 			ST_MakePoint($1, $2)::geography,
 			$3 * 1609.34
 		)
+		ORDER BY e.date_created DESC;
 	`, city.Longitude, city.Latitude, distance)
 
 	if err != nil {
@@ -502,6 +540,7 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		var entry Entry
 		err := rows.Scan(&entry.ID,
 			&entry.Address,
+			&entry.Title,
 			&entry.Content,
 			&entry.Views,
 			&entry.DateCreated,
@@ -612,13 +651,18 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var entry Entry
 
 	err = db.QueryRow(`
-		SELECT entry.id, address, content, views, date_created,
+		SELECT e.id, e.address, er.content, e.views, date_created,
 			username, first_name, last_name, title,
 			ST_X(location::geometry) AS longitude,
 			ST_Y(location::geometry) AS latitude
-		FROM entry
-		JOIN users ON entry.creator_id = users.id
-		WHERE entry.id = $1
+		FROM entry e
+		JOIN users ON e.creator_id = users.id
+		JOIN (
+			SELECT DISTINCT ON (entry_id) entry_id, content, revision_number
+			FROM entry_revision
+			ORDER BY entry_id, revision_number DESC
+		) er ON e.id = er.entry_id
+		WHERE e.id = $1
 	`, entryID).Scan(&entry.ID,
 		&entry.Address,
 		&entry.Content,
@@ -641,10 +685,8 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	var tags []string
-
 	rows, err := db.Query(`
-		SELECT tags.name
+		SELECT tags.name, tags.classification
 		FROM tags
 		JOIN tags_entry ON tags.id = tags_entry.tag_id
 		WHERE tags_entry.entry_id = $1
@@ -658,9 +700,19 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	defer rows.Close()
 
+	var tags []Tag
+
 	for rows.Next() {
-		var tag string
-		err := rows.Scan(&tag)
+		var tagName string
+		var classification string
+
+		err := rows.Scan(&tagName, &classification)
+
+		tag := Tag{
+			Name:           tagName,
+			Classification: classification,
+		}
+
 		if err != nil {
 			fmt.Println("Row scan error for tags:", err)
 			http.Error(w, "Failed to read tags", http.StatusInternalServerError)
