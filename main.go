@@ -14,7 +14,6 @@ import (
 
 	comments "backend/api/v1/comments"
 	entry "backend/api/v1/entry"
-	tags "backend/api/v1/tags"
 	users "backend/api/v1/users"
 	utils "backend/api/v1/utils"
 )
@@ -143,12 +142,6 @@ func handleRequests() {
 	}).Methods("GET")
 	myRouter.HandleFunc("/retrieve-comment-replies", func(w http.ResponseWriter, r *http.Request) {
 		comments.GetCommentReplies(w, r, db)
-	}).Methods("GET")
-
-	// ==========================
-	// Tags API routes
-	myRouter.HandleFunc("/retrieve-tags", func(w http.ResponseWriter, r *http.Request) {
-		tags.RetrieveTags(w, r, db)
 	}).Methods("GET")
 
 	log.Println("Server starting on :8080")
