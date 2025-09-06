@@ -941,3 +941,23 @@ func VoteEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	fmt.Println("Upvote interaction processed successfully")
 
 }
+
+func EditEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	type EditEntryRequest struct {
+		NewTitle   string `json:"newTitle"`
+		NewContent string `json:"newContent"`
+		NewTags    []Tag  `json:"newTags"`
+	}
+
+	var req EditEntryRequest
+
+	err := json.NewDecoder(r.Body).Decode(&req)
+
+	if err != nil {
+		fmt.Println("Error decoding response", err)
+		http.Error(w, "Failed to decode response", http.StatusInternalServerError)
+	}
+
+	fmt.Println(req)
+
+}

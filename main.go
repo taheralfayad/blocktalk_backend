@@ -130,6 +130,9 @@ func handleRequests() {
 	myRouter.HandleFunc("/vote-entry", func(w http.ResponseWriter, r *http.Request) {
 		entry.VoteEntry(w, r, db)
 	}).Methods("POST")
+	myRouter.HandleFunc("/edit-entry", func(w http.ResponseWriter, r *http.Request) {
+		entry.EditEntry(w, r, db)
+	})
 
 	// =========================
 
