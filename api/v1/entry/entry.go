@@ -252,21 +252,21 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	}
 
-	entryID := 0
+	var entryRevisionId int
 
 	err = db.QueryRow(`
 		WITH entry_insert AS (
-			INSERT INTO entry (title, address, creator_id, location) 
-			VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326))
+			INSERT INTO entry (address, creator_id, location) 
+			VALUES ($2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326))
 			RETURNING id
 		),
 		revision_number AS (
 			SELECT COUNT(*) + 1 AS revision_number FROM entry_revision WHERE entry_id = (SELECT id FROM entry_insert)
 		)
-		INSERT INTO entry_revision (entry_id, content, revision_number, creator_id)
-		SELECT (SELECT id FROM entry_insert), $6, (SELECT revision_number FROM revision_number), $3
-		RETURNING (SELECT id FROM entry_insert)	
-		`, payload.Title, payload.Location, userID, payload.Longitude, payload.Latitude, payload.Description).Scan(&entryID)
+		INSERT INTO entry_revision (entry_id, title, content, revision_number, creator_id)
+		SELECT (SELECT id FROM entry_insert), $1, $6, (SELECT revision_number FROM revision_number), $3
+		RETURNING id
+		`, payload.Title, payload.Location, userID, payload.Longitude, payload.Latitude, payload.Description).Scan(&entryRevisionId)
 
 	if err != nil {
 		fmt.Println("DB insert error:", err)
@@ -276,9 +276,9 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	for _, tagInDatabase := range tagsInDatabase {
 		_, err = db.Exec(`
-			INSERT INTO tags_entry (entry_id, tag_id)
+			INSERT INTO tags_entry_revision (entry_revision_id, tag_id)
 			SELECT $1, id FROM tags WHERE name = $2
-		`, entryID, tagInDatabase)
+		`, entryRevisionId, tagInDatabase)
 		if err != nil {
 			fmt.Println("DB insert error for entry_tags:", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -324,7 +324,7 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 		FROM entry
 		JOIN users ON entry.creator_id = users.id
 		JOIN (
-			SELECT DISTINCT ON (entry_id) entry_id, content, revision_number
+			SELECT DISTINCT ON (entry_id) entry_id, title, content, revision_number
 			FROM entry_revision
 			ORDER BY entry_id, revision_number DESC
 		) er ON entry.id = er.entry_id
@@ -500,7 +500,7 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	rows, err := db.Query(`
 		SELECT e.id AS id,
 			e.address,
-			e.title,
+			er.title,
 			er.content,
 			e.views,
 			e.date_created,
@@ -512,7 +512,7 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		FROM entry e
 		JOIN users u ON e.creator_id = u.id
 		JOIN (
-			SELECT DISTINCT ON (entry_id) entry_id, content, revision_number, date_created
+			SELECT DISTINCT ON (entry_id) entry_id, title, content, revision_number, date_created
 			FROM entry_revision
 			ORDER BY entry_id, revision_number DESC
 		) er ON e.id = er.entry_id
@@ -649,16 +649,17 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 
 	var entry Entry
+	var entryRevisionId int
 
 	err = db.QueryRow(`
 		SELECT e.id, e.address, er.content, e.views, date_created,
-			username, first_name, last_name, title,
+			username, first_name, last_name, er.title, er.id,
 			ST_X(location::geometry) AS longitude,
 			ST_Y(location::geometry) AS latitude
 		FROM entry e
 		JOIN users ON e.creator_id = users.id
 		JOIN (
-			SELECT DISTINCT ON (entry_id) entry_id, content, revision_number
+			SELECT DISTINCT ON (entry_id) id, entry_id, title, content, revision_number
 			FROM entry_revision
 			ORDER BY entry_id, revision_number DESC
 		) er ON e.id = er.entry_id
@@ -672,8 +673,10 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		&entry.FirstName,
 		&entry.LastName,
 		&entry.Title,
+		&entryRevisionId,
 		&entry.Longitude,
-		&entry.Latitude)
+		&entry.Latitude,
+	)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -688,9 +691,9 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	rows, err := db.Query(`
 		SELECT tags.name, tags.classification
 		FROM tags
-		JOIN tags_entry ON tags.id = tags_entry.tag_id
-		WHERE tags_entry.entry_id = $1
-	`, entry.ID)
+		JOIN tags_entry_revision ON tags.id = tags_entry_revision.tag_id
+		WHERE tags_entry_revision.entry_revision_id = $1
+	`, entryRevisionId)
 
 	if err != nil {
 		fmt.Println("DB query error for tags:", err)
