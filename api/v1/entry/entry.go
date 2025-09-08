@@ -1,7 +1,7 @@
 package v1
 
 import (
-	"backend/api/v1/utils"
+	utils "backend/api/v1/utils"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -199,19 +199,15 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	token, err := jwt.Parse(r.Header.Get("Authorization"), func(token *jwt.Token) (interface{}, error) {
-		return utils.JwtSecret, nil
-	})
+	var username string
 
-	if err != nil || !token.Valid {
+	username, err = utils.VerifyTokenAndReturnUsername(r)
+
+	if err != nil {
 		fmt.Println("Invalid token:", err)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	claims := token.Claims.(jwt.MapClaims)
-
-	username := claims["username"].(string)
 
 	userID := 0
 
@@ -950,9 +946,13 @@ func EditEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		NewTitle   string `json:"newTitle"`
 		NewContent string `json:"newContent"`
 		NewTags    []Tag  `json:"newTags"`
+		EntryID    int    `json:"entryId"`
 	}
 
 	var req EditEntryRequest
+	var username string
+	var userID int
+	var entryRevisionId int
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 
@@ -961,6 +961,67 @@ func EditEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		http.Error(w, "Failed to decode response", http.StatusInternalServerError)
 	}
 
-	fmt.Println(req)
+	username, err = utils.VerifyTokenAndReturnUsername(r)
 
+	if err != nil {
+		fmt.Println("Invalid token:", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	err = db.QueryRow(`
+		SELECT id FROM users WHERE username = $1
+	`, username).Scan(&userID)
+
+	if err != nil {
+		fmt.Println("Failed to retrieve user by username:", username, "err:", err)
+		http.Error(w, "Failed to retrieve user by username", http.StatusNotFound)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		fmt.Println("failed to start transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+
+	err = tx.QueryRow(`
+		WITH revision_number AS (
+			SELECT COUNT(*) + 1 AS revision_number FROM entry_revision WHERE entry_id = $1
+		)
+		INSERT INTO entry_revision (entry_id, title, content, revision_number, creator_id)
+		SELECT $1, $2, $3, revision_number, $4 FROM revision_number
+		RETURNING id
+	`, req.EntryID, req.NewTitle, req.NewContent, userID).Scan(&entryRevisionId)
+	if err != nil {
+		fmt.Println("failed to insert entry_revision: %w", err)
+	}
+
+	for _, tag := range req.NewTags {
+		var tagID int
+		err = tx.QueryRow(`
+			INSERT INTO tags (name, classification)
+			VALUES ($1, $2)
+			ON CONFLICT (name) DO UPDATE 
+			SET classification = EXCLUDED.classification
+			RETURNING id
+		`, tag.Name, tag.Classification).Scan(&tagID)
+		if err != nil {
+			fmt.Println("failed to insert or fetch tag: %w", err)
+		}
+
+		_, err = tx.Exec(`
+			INSERT INTO tags_entry_revision (entry_revision_id, tag_id)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING
+		`, entryRevisionId, tagID)
+		if err != nil {
+			fmt.Println("failed to insert tag association: %w", err)
+		}
+	}
 }

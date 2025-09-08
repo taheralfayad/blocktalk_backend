@@ -1,13 +1,11 @@
 package v1
 
 import (
-	"backend/api/v1/utils"
+	utils "backend/api/v1/utils"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
 type CommentRequest struct {
@@ -29,18 +27,11 @@ type Comment struct {
 }
 
 func AddComment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	token, err := jwt.Parse(r.Header.Get("Authorization"), func(token *jwt.Token) (interface{}, error) {
-		return utils.JwtSecret, nil
-	})
+	username, err := utils.VerifyTokenAndReturnUsername(r)
 
-	var username string
-
-	if err != nil || !token.Valid {
+	if err != nil {
+		fmt.Println("Invalid Token, err: ", err)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	} else {
-		claims := token.Claims.(jwt.MapClaims)
-		username = claims["username"].(string)
 	}
 
 	var userID int
