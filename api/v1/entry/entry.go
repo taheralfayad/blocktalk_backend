@@ -1,7 +1,8 @@
-package v1
+package entry
 
 import (
-	utils "backend/api/v1/utils"
+	"backend/api/v1/structs"
+	"backend/api/v1/utils"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -14,70 +15,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/lithammer/fuzzysearch/fuzzy"
 )
-
-type CreateEntryRequest struct {
-	Title       string  `json:"title"`
-	Location    string  `json:"location"`
-	Latitude    float64 `json:"latitude"`
-	Longitude   float64 `json:"longitude"`
-	Tags        []Tag   `json:"tags"`
-	Description string  `json:"description"`
-}
-
-type City struct {
-	Name         string  `json:"city"`
-	StateId      string  `json:"state_id"`
-	StateName    string  `json:"state_name"`
-	CountyFips   int     `json:"county_fips"`
-	CountyName   string  `json:"county_name"`
-	Latitude     float64 `json:"lat"`
-	Longitude    float64 `json:"lng"`
-	CityAscii    string  `json:"city_ascii"`
-	Population   int     `json:"population"`
-	Density      float64 `json:"density"`
-	Timezone     string  `json:"timezone"`
-	Ranking      int     `json:"ranking"`
-	Id           int     `json:"id"`
-	Source       string  `json:"source"`
-	Military     bool    `json:"military"`
-	Incorporated bool    `json:"incorporated"`
-}
-
-type Comment struct {
-	ID        int    `json:"id"`
-	EntryID   int    `json:"entry_id"`
-	UserID    int    `json:"user_id"`
-	ParentID  *int   `json:"parent_id,omitempty"`
-	Context   string `json:"context"`
-	Upvotes   int    `json:"upvotes"`
-	Downvotes int    `json:"downvotes"`
-	Type      string `json:"type"`
-}
-
-type Tag struct {
-	Name           string `json:"name"`
-	Classification string `json:"classification"`
-}
-
-type Entry struct {
-	ID               int       `json:"id"`
-	Title            string    `json:"title"`
-	Address          string    `json:"address"`
-	Content          string    `json:"content"`
-	Upvotes          int       `json:"upvotes"`
-	Downvotes        int       `json:"downvotes"`
-	NumberOfComments int       `json:"number_of_comments"`
-	Views            int       `json:"views"`
-	DateCreated      string    `json:"date_created"`
-	Username         string    `json:"username"`
-	FirstName        string    `json:"first_name"`
-	LastName         string    `json:"last_name"`
-	Longitude        float64   `json:"longitude"`
-	Latitude         float64   `json:"latitude"`
-	Tags             []Tag     `json:"tags,omitempty"`
-	Comments         []Comment `json:"comments,omitempty"`
-	UserInteraction  string    `json:"user_interaction,omitempty"`
-}
 
 func AutocompleteAddress(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("query")
@@ -160,6 +97,15 @@ func AutocompleteAddress(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	type CreateEntryRequest struct {
+		Title       string        `json:"title"`
+		Location    string        `json:"location"`
+		Latitude    float64       `json:"latitude"`
+		Longitude   float64       `json:"longitude"`
+		Tags        []structs.Tag `json:"tags"`
+		Description string        `json:"description"`
+	}
+
 	var payload CreateEntryRequest
 
 	err := json.NewDecoder(r.Body).Decode(&payload)
@@ -227,30 +173,21 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	fmt.Println("User ID:", userID)
 
-	tagsInDatabase := []string{}
-
-	for _, tag := range payload.Tags {
-		var tmp string
-		err = db.QueryRow(`
-			INSERT INTO tags (name, classification) 
-			VALUES ($1, $2) 
-			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name, classification = EXCLUDED.classification
-			RETURNING name
-		`, tag.Name, tag.Classification).Scan(&tmp) // Functions as a "get or create" for tags
-
-		tagsInDatabase = append(tagsInDatabase, tmp)
-
-		if err != nil {
-			fmt.Println("DB insert error for tags:", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-
+	tx, err := db.Begin()
+	if err != nil {
+		fmt.Println("failed to start transaction: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
 
 	var entryRevisionId int
 
-	err = db.QueryRow(`
+	err = tx.QueryRow(`
 		WITH entry_insert AS (
 			INSERT INTO entry (address, creator_id, location) 
 			VALUES ($2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326))
@@ -270,20 +207,7 @@ func CreateEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	for _, tagInDatabase := range tagsInDatabase {
-		_, err = db.Exec(`
-			INSERT INTO tags_entry_revision (entry_revision_id, tag_id)
-			SELECT $1, id FROM tags WHERE name = $2
-		`, entryRevisionId, tagInDatabase)
-		if err != nil {
-			fmt.Println("DB insert error for entry_tags:", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Entry created successfully"))
+	utils.InsertTagAndEntryRevisionAssociation(tx, entryRevisionId, payload.Tags)
 }
 
 func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, db *sql.DB) {
@@ -339,10 +263,10 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 	}
 	defer rows.Close()
 
-	var entries []Entry
+	var entries []structs.Entry
 
 	for rows.Next() {
-		var entry Entry
+		var entry structs.Entry
 		err := rows.Scan(&entry.ID,
 			&entry.Address,
 			&entry.Content,
@@ -385,7 +309,7 @@ func RetrieveEntriesWithinVisibleBounds(w http.ResponseWriter, r *http.Request, 
 }
 
 func RetrieveCity(w http.ResponseWriter, r *http.Request) {
-	var cities []City
+	var cities []structs.City
 
 	jsonFile, err := os.Open("/app/static/us_cities.json")
 
@@ -466,7 +390,7 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	byteValue, _ := io.ReadAll(jsonFile)
 
-	var cities []City
+	var cities []structs.City
 
 	err = json.Unmarshal(byteValue, &cities)
 
@@ -476,7 +400,7 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	var city City
+	var city structs.City
 
 	for _, c := range cities {
 		if c.Name == location {
@@ -528,12 +452,12 @@ func RetrieveFeed(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	defer rows.Close()
 
-	var entries []Entry
+	var entries []structs.Entry
 
 	for rows.Next() {
 		var numberOfComments int
 
-		var entry Entry
+		var entry structs.Entry
 		err := rows.Scan(&entry.ID,
 			&entry.Address,
 			&entry.Title,
@@ -644,7 +568,7 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		username = claims["username"].(string)
 	}
 
-	var entry Entry
+	var entry structs.Entry
 	var entryRevisionId int
 
 	err = db.QueryRow(`
@@ -699,7 +623,7 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	defer rows.Close()
 
-	var tags []Tag
+	var tags []structs.Tag
 
 	for rows.Next() {
 		var tagName string
@@ -707,7 +631,7 @@ func RetrieveEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 		err := rows.Scan(&tagName, &classification)
 
-		tag := Tag{
+		tag := structs.Tag{
 			Name:           tagName,
 			Classification: classification,
 		}
@@ -943,10 +867,10 @@ func VoteEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 func EditEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	type EditEntryRequest struct {
-		NewTitle   string `json:"newTitle"`
-		NewContent string `json:"newContent"`
-		NewTags    []Tag  `json:"newTags"`
-		EntryID    int    `json:"entryId"`
+		NewTitle   string        `json:"newTitle"`
+		NewContent string        `json:"newContent"`
+		NewTags    []structs.Tag `json:"newTags"`
+		EntryID    int           `json:"entryId"`
 	}
 
 	var req EditEntryRequest
@@ -998,30 +922,16 @@ func EditEntry(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		SELECT $1, $2, $3, revision_number, $4 FROM revision_number
 		RETURNING id
 	`, req.EntryID, req.NewTitle, req.NewContent, userID).Scan(&entryRevisionId)
+
 	if err != nil {
 		fmt.Println("failed to insert entry_revision: %w", err)
+		http.Error(w, "Failed to upload revision", http.StatusInternalServerError)
 	}
 
-	for _, tag := range req.NewTags {
-		var tagID int
-		err = tx.QueryRow(`
-			INSERT INTO tags (name, classification)
-			VALUES ($1, $2)
-			ON CONFLICT (name) DO UPDATE 
-			SET classification = EXCLUDED.classification
-			RETURNING id
-		`, tag.Name, tag.Classification).Scan(&tagID)
-		if err != nil {
-			fmt.Println("failed to insert or fetch tag: %w", err)
-		}
+	err = utils.InsertTagAndEntryRevisionAssociation(tx, entryRevisionId, req.NewTags)
 
-		_, err = tx.Exec(`
-			INSERT INTO tags_entry_revision (entry_revision_id, tag_id)
-			VALUES ($1, $2)
-			ON CONFLICT DO NOTHING
-		`, entryRevisionId, tagID)
-		if err != nil {
-			fmt.Println("failed to insert tag association: %w", err)
-		}
+	if err != nil {
+		fmt.Println("failed to insert tags in entry_revision: %w", err)
+		http.Error(w, "failed to upload revision", http.StatusInternalServerError)
 	}
 }

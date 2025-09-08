@@ -1,10 +1,13 @@
 package utils
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
+
+	structs "backend/api/v1/structs"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -65,4 +68,32 @@ func VerifyTokenAndReturnUsername(r *http.Request) (string, error) {
 		return "", fmt.Errorf("authorization header missing")
 	}
 	return ParseTokenAndReturnUsername(tokenString)
+}
+
+func InsertTagAndEntryRevisionAssociation(tx *sql.Tx, entryRevisionId int, tags []structs.Tag) error {
+	for _, tag := range tags {
+		var tagID int
+		err := tx.QueryRow(`
+			INSERT INTO tags (name, classification)
+			VALUES ($1, $2)
+			ON CONFLICT (name) DO UPDATE
+			SET classification = EXCLUDED.classification
+			RETURNING id
+		`, tag.Name, tag.Classification).Scan(&tagID)
+		if err != nil {
+			fmt.Println("failed to insert or fetch tag: %w", err)
+			return err
+		}
+
+		_, err = tx.Exec(`
+			INSERT INTO tags_entry_revision (entry_revision_id, tag_id)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING
+		`, entryRevisionId, tagID)
+		if err != nil {
+			fmt.Println("failed to insert tag association: %w", err)
+		}
+	}
+
+	return nil
 }
