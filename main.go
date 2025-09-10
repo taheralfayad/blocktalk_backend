@@ -63,6 +63,7 @@ func validateToken(next http.Handler) http.Handler {
 			"/retrieve-comments":        true,
 			"/retrieve-comment-replies": true,
 			"/retrieve-tags":            true,
+			"/retrieve-entries-within-visible-bounds": true,
 		}
 
 		if skipPaths[r.URL.Path] {
