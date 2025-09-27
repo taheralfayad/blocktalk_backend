@@ -1,0 +1,1 @@
+ALTER TABLE conversation DROP COLUMN text_to_improve;

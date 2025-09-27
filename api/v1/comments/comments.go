@@ -17,14 +17,15 @@ type CommentRequest struct {
 }
 
 type Comment struct {
-	ID           int    `json:"id"`
-	UserID       int    `json:"user_id"`
-	EntryID      int    `json:"entry_id"`
-	ParentID     *int   `json:"parent_id,omitempty"`
-	Context      string `json:"context"`
-	Type         string `json:"type"`
-	Username     string `json:"username,omitempty"`
-	NumOfReplies int    `json:"num_of_replies,omitempty"`
+	ID            int    `json:"id"`
+	UserID        int    `json:"user_id"`
+	EntryID       int    `json:"entry_id"`
+	ParentID      *int   `json:"parent_id,omitempty"`
+	Context       string `json:"context"`
+	Type          string `json:"type"`
+	Username      string `json:"username,omitempty"`
+	NumOfReplies  int    `json:"num_of_replies,omitempty"`
+	TextToImprove string `json:"text_to_improve,omitempty"`
 }
 
 func AddComment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
@@ -65,11 +66,11 @@ func AddComment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 
 	err = db.QueryRow(
-		`INSERT INTO conversation (user_id, entry_id, parent_id, context, type)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, user_id, entry_id, parent_id, context, type`,
-		userID, req.EntryID, req.ParentID, req.Context, req.Type,
-	).Scan(&comment.ID, &comment.UserID, &comment.EntryID, &comment.ParentID, &comment.Context, &comment.Type)
+		`INSERT INTO conversation (user_id, entry_id, parent_id, context, type, text_to_improve)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, user_id, entry_id, parent_id, context, type, text_to_improve`,
+		userID, req.EntryID, req.ParentID, req.Context, req.Type, req.TextToImprove,
+	).Scan(&comment.ID, &comment.UserID, &comment.EntryID, &comment.ParentID, &comment.Context, &comment.Type, &comment.TextToImprove)
 
 	if err != nil {
 		http.Error(w, "Failed to add comment", http.StatusInternalServerError)
@@ -99,7 +100,8 @@ func GetEntryComments(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			c.entry_id, 
 			c.parent_id, 
 			c.context, 
-			c.type
+			c.type,
+			c.text_to_improve
 		FROM conversation c
 		WHERE c.entry_id = $1 AND c.parent_id IS NULL
 	`, entryID)
@@ -117,9 +119,26 @@ func GetEntryComments(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	for rows.Next() {
 		var comment Comment
-		err := rows.Scan(&comment.ID, &comment.UserID, &comment.Username, &comment.EntryID, &comment.ParentID, &comment.Context, &comment.Type)
+
+		var textToImprove sql.NullString // this annoying little detail is because strings cannot unfortunately be nulll in go. sorry to future devs
+
+		err := rows.Scan(
+			&comment.ID,
+			&comment.UserID,
+			&comment.Username,
+			&comment.EntryID,
+			&comment.ParentID,
+			&comment.Context,
+			&comment.Type,
+			&textToImprove,
+		)
+
+		if textToImprove.Valid {
+			comment.TextToImprove = textToImprove.String
+		}
 
 		if err != nil {
+			fmt.Println(err)
 			http.Error(w, "Failed to scan comment", http.StatusInternalServerError)
 			return
 		}
