@@ -9,10 +9,11 @@ import (
 )
 
 type CommentRequest struct {
-	EntryID  int    `json:"entry_id"`
-	ParentID int    `json:"parent_id,omitempty"`
-	Context  string `json:"context"`
-	Type     string `json:"classification"`
+	EntryID       int    `json:"entry_id"`
+	ParentID      *int   `json:"parent_id,omitempty"`
+	Context       string `json:"context"`
+	Type          string `json:"classification"`
+	TextToImprove string `json:"text_to_improve,omitempty"`
 }
 
 type Comment struct {
@@ -32,6 +33,7 @@ func AddComment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if err != nil {
 		fmt.Println("Invalid Token, err: ", err)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	var userID int
@@ -56,6 +58,10 @@ func AddComment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if req.EntryID == -1 || req.Context == "" || req.Type == "" {
 		http.Error(w, "Missing required fields", http.StatusBadRequest)
 		return
+	}
+
+	if req.TextToImprove == "" && req.Type == "Improvement" {
+		http.Error(w, "No text provided to improve", http.StatusBadRequest)
 	}
 
 	err = db.QueryRow(
