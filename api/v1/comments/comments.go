@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type CommentRequest struct {
@@ -16,14 +18,17 @@ type CommentRequest struct {
 }
 
 type Comment struct {
-	ID           int    `json:"id"`
-	UserID       int    `json:"user_id"`
-	EntryID      int    `json:"entry_id"`
-	ParentID     *int   `json:"parent_id,omitempty"`
-	Context      string `json:"context"`
-	Type         string `json:"type"`
-	Username     string `json:"username,omitempty"`
-	NumOfReplies int    `json:"num_of_replies,omitempty"`
+	ID                        int    `json:"id"`
+	UserID                    int    `json:"user_id"`
+	EntryID                   int    `json:"entry_id"`
+	ParentID                  *int   `json:"parent_id,omitempty"`
+	Context                   string `json:"context"`
+	Type                      string `json:"type"`
+	Username                  string `json:"username,omitempty"`
+	NumOfReplies              int    `json:"num_of_replies"`
+	NumberOfUpvotes           int    `json:"num_of_upvotes"`
+	NumberOfDownvotes         int    `json:"num_of_downvotes"`
+	CurrentCommentInteraction string `json:"current_comment_interaction,omitempty"`
 }
 
 func AddComment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
@@ -112,8 +117,10 @@ func GetEntryComments(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	for rows.Next() {
 		var comment Comment
+		var currentInteractionType string
+		var upvotes, downvotes int
 
-		err := rows.Scan(
+		err = rows.Scan(
 			&comment.ID,
 			&comment.UserID,
 			&comment.Username,
@@ -139,7 +146,26 @@ func GetEntryComments(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			comment.NumOfReplies = 0
 		}
 
+		err = db.QueryRow(`
+			SELECT interaction_type
+			FROM conversation_interactions
+			WHERE user_id = $1 AND conversation_id = $2
+		`, comment.UserID, comment.ID).Scan(&currentInteractionType)
+
+		if err != nil && err != sql.ErrNoRows {
+			fmt.Println(err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}
+
+		upvotes, downvotes = utils.RetrieveNumberOfUpvotesAndDownvotesForTable("conversation", comment.ID, db)
+
+		fmt.Println(upvotes, downvotes)
+
+		comment.CurrentCommentInteraction = currentInteractionType
+
 		comment.NumOfReplies = commentCount
+		comment.NumberOfUpvotes = upvotes
+		comment.NumberOfDownvotes = downvotes
 
 		comments = append(comments, comment)
 	}
@@ -168,7 +194,7 @@ func GetCommentReplies(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			c.user_id, 
 			(SELECT u.username FROM users u WHERE u.id = c.user_id) AS username,
 			c.entry_id, 
-			c.parent_id, 
+			c.parent_id,
 			c.context, 
 			c.type
 		FROM conversation c
@@ -186,12 +212,16 @@ func GetCommentReplies(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	for rows.Next() {
 		var reply Comment
+		var upvotes, downvotes int
+
 		err := rows.Scan(&reply.ID, &reply.UserID, &reply.Username, &reply.EntryID, &reply.ParentID, &reply.Context, &reply.Type)
 
 		if err != nil {
 			http.Error(w, "Failed to scan reply", http.StatusInternalServerError)
 			return
 		}
+
+		upvotes, downvotes = utils.RetrieveNumberOfUpvotesAndDownvotesForTable("conversation", reply.ID, db)
 
 		err = db.QueryRow(`
 			SELECT COUNT(*)
@@ -204,13 +234,153 @@ func GetCommentReplies(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		}
 
 		reply.NumOfReplies = replyCount
-
-		fmt.Println("Reply:", reply)
-		fmt.Println("Reply Count:", replyCount)
+		reply.NumberOfUpvotes = upvotes
+		reply.NumberOfDownvotes = downvotes
+		reply.CurrentCommentInteraction = utils.RetrieveCurrentInteractionTypeForTable(
+			"conversation",
+			reply.UserID,
+			reply.ID,
+			db,
+		)
 
 		replies = append(replies, reply)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(replies)
+}
+
+func VoteOnComment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	token, err := jwt.Parse(r.Header.Get("Authorization"), func(token *jwt.Token) (interface{}, error) {
+		return utils.JwtSecret, nil
+	})
+
+	if err != nil || !token.Valid {
+		fmt.Println("Invalid token:", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	}
+
+	claims := token.Claims.(jwt.MapClaims)
+
+	username := claims["username"].(string)
+
+	var userID int
+
+	err = db.QueryRow(`
+		SELECT id FROM users WHERE username = $1	
+	`, username).Scan(&userID)
+
+	if err != nil {
+		fmt.Println("DB query error:", err)
+		http.Error(w, "internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	type InteractionRequest struct {
+		CommentID       int    `json:"comment_id"`
+		InteractionType string `json:"interaction_type"`
+	}
+
+	var req InteractionRequest
+
+	err = json.NewDecoder(r.Body).Decode(&req)
+
+	if err != nil {
+		fmt.Println("Error decoding json", err)
+		http.Error(w, "internal server error", http.StatusBadRequest)
+		return
+	}
+
+	if req.CommentID == 0 || req.InteractionType == "" {
+		http.Error(w, "Comment ID and interaction type are required", http.StatusBadRequest)
+		return
+	}
+
+	var currentInteraction string
+
+	err = db.QueryRow(`
+		SELECT interaction_type
+		FROM conversation_interactions
+		WHERE user_id = $1 and conversation_id = $2
+	`, userID, req.CommentID).Scan(&currentInteraction)
+
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Println("DB query error:", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Printf("DEBUG currentInteraction='%s', req.InteractionType='%s'\n", currentInteraction, req.InteractionType)
+
+	if currentInteraction == req.InteractionType {
+		_, err = db.Exec(`
+			DELETE FROM conversation_interactions
+			WHERE user_id = $1 AND conversation_id = $2
+		`, userID, req.CommentID)
+	} else if currentInteraction != "" {
+		fmt.Println("here?")
+		_, err = db.Exec(`
+			UPDATE conversation_interactions
+			SET interaction_type = $3, created_at = CURRENT_TIMESTAMP
+			WHERE user_id = $1 AND conversation_id = $2
+		`, userID, req.CommentID, req.InteractionType)
+	} else {
+		_, err = db.Exec(`
+			INSERT into conversation_interactions (conversation_id, user_id, interaction_type)
+			VALUES ($1, $2, $3)
+		`, req.CommentID, userID, req.InteractionType)
+	}
+
+	if err != nil {
+		fmt.Println("DB exec error:", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var updatedInteractionType string
+
+	err = db.QueryRow(`
+		SELECT interaction_type
+		FROM conversation_interactions
+		WHERE user_id = $1 and conversation_id = $2
+	`, userID, req.CommentID).Scan(&updatedInteractionType)
+
+	if err == sql.ErrNoRows {
+		updatedInteractionType = ""
+	} else if err != nil {
+		fmt.Println("DB query error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	upvotes, downvotes := utils.RetrieveNumberOfUpvotesAndDownvotesForTable(
+		"conversation",
+		req.CommentID,
+		db,
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+
+	type VoteResponse struct {
+		Upvotes         int    `json:"upvotes"`
+		Downvotes       int    `json:"downvotes"`
+		UserInteraction string `json:"user_interaction"`
+	}
+
+	response := VoteResponse{
+		Upvotes:         upvotes,
+		Downvotes:       downvotes,
+		UserInteraction: updatedInteractionType,
+	}
+
+	err = json.NewEncoder(w).Encode(response)
+
+	if err != nil {
+		fmt.Println("Error encoding response:", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Println("Vote interaction processed successfully")
+
 }

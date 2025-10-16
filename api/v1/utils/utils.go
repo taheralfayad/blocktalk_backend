@@ -97,3 +97,62 @@ func InsertTagAndEntryRevisionAssociation(tx *sql.Tx, entryRevisionId int, tags 
 
 	return nil
 }
+
+func RetrieveNumberOfUpvotesAndDownvotesForTable(
+	tableName string,
+	rowId int,
+	db *sql.DB,
+) (int, int) {
+	var upvotes, downvotes int
+
+	if tableName != "conversation" && tableName != "entry" {
+		return 0, 0
+	}
+
+	queryUp := fmt.Sprintf(`
+		SELECT COUNT(*) 
+		FROM %s_interactions
+		WHERE %s_id = $1 AND interaction_type = 'upvote'
+	`, tableName, tableName)
+
+	queryDown := fmt.Sprintf(`
+		SELECT COUNT(*) 
+		FROM %s_interactions
+		WHERE %s_id = $1 AND interaction_type = 'downvote'
+	`, tableName, tableName)
+
+	if err := db.QueryRow(queryUp, rowId).Scan(&upvotes); err != nil && err != sql.ErrNoRows {
+		fmt.Printf("Error retrieving upvotes for %s %d: %v\n", tableName, rowId, err)
+	}
+
+	if err := db.QueryRow(queryDown, rowId).Scan(&downvotes); err != nil && err != sql.ErrNoRows {
+		fmt.Printf("Error retrieving downvotes for %s %d: %v\n", tableName, rowId, err)
+	}
+
+	return upvotes, downvotes
+}
+
+func RetrieveCurrentInteractionTypeForTable(
+	tableName string,
+	userId int,
+	rowId int,
+	db *sql.DB,
+) string {
+	var currentInteractionType string
+
+	if tableName != "conversation" && tableName != "entry" {
+		return currentInteractionType
+	}
+
+	currentInteractionTypeQuery := fmt.Sprintf(`
+		SELECT interaction_type
+		FROM %s_interactions
+		WHERE user_id = $1 AND %s_id = $2
+	`, tableName, tableName)
+
+	if err := db.QueryRow(currentInteractionTypeQuery, userId, rowId).Scan(&currentInteractionType); err != nil && err != sql.ErrNoRows {
+		fmt.Printf("Error retrieving current interaction type for %s %d: %v\n", tableName, rowId, err)
+	}
+
+	return currentInteractionType
+}

@@ -147,6 +147,9 @@ func handleRequests() {
 	myRouter.HandleFunc("/retrieve-comment-replies", func(w http.ResponseWriter, r *http.Request) {
 		comments.GetCommentReplies(w, r, db)
 	}).Methods("GET")
+	myRouter.HandleFunc("/vote-on-comment", func(w http.ResponseWriter, r *http.Request) {
+		comments.VoteOnComment(w, r, db)
+	})
 
 	log.Println("Server starting on :8080")
 	log.Fatal(http.ListenAndServe(":8080", myRouter))
