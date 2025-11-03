@@ -11,6 +11,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/handlers"
 
 	comments "backend/api/v1/comments"
 	entry "backend/api/v1/entry"
@@ -103,7 +104,7 @@ func handleRequests() {
 	// User API routes
 	myRouter.HandleFunc("/create-user", func(w http.ResponseWriter, r *http.Request) {
 		users.CreateUser(w, r, db)
-	}).Methods("POST")
+	}).Methods("POST", "OPTIONS")
 
 	myRouter.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		users.LoginUser(w, r, db)
@@ -151,8 +152,18 @@ func handleRequests() {
 		comments.VoteOnComment(w, r, db)
 	})
 
+	headersOk := handlers.AllowedHeaders([]string{
+		"X-Requested-With",
+		"Content-Type",
+		"Authorization",
+		"Accept",
+		"Origin",
+	})
+	originsOk := handlers.AllowedOrigins([]string{"http://localhost:5173"})
+	methodsOk := handlers.AllowedMethods([]string{"GET", "HEAD", "POST", "PUT", "OPTIONS"})
+
 	log.Println("Server starting on :8080")
-	log.Fatal(http.ListenAndServe(":8080", myRouter))
+	log.Fatal(http.ListenAndServe(":8080", handlers.CORS(originsOk, headersOk, methodsOk)(myRouter)))
 
 }
 
