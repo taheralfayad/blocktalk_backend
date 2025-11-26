@@ -347,10 +347,17 @@ func RetrieveCity(w http.ResponseWriter, r *http.Request) {
 		matches = matches[:3] // Limit to top 3 matches
 	}
 
-	var results []string
+	var results []structs.City
+
+	cityByName := make(map[string]structs.City)
+	for _, city := range cities {
+			cityByName[city.Name] = city
+	}
 
 	for _, match := range matches {
-		results = append(results, match.Target)
+			if city, ok := cityByName[match.Target]; ok {
+					results = append(results, city)
+			}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
