@@ -55,25 +55,21 @@ func handleRequests() {
 		AllowCredentials: true,
 	}))
 
-	r.POST("/create-user", func(c *gin.Context) {
-		users.CreateUser(c, db)
-	})
+	usersGroup := r.Group("/users")
 
-	myRouter.HandleFunc("/create-user", func(w http.ResponseWriter, r *http.Request) {
-		users.CreateUser(w, r, db)
-	}).Methods("POST", "OPTIONS")
+	{
+		usersGroup.POST("/create-user", func(c *gin.Context) {
+			users.CreateUser(c, db)
+		})
 
-	myRouter.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		users.LoginUser(w, r, db)
-	}).Methods("POST")
+		usersGroup.POST("/login", func(c *gin.Context) {
+			users.LoginUser(c, db)
+		})
 
-	myRouter.HandleFunc("/refresh-token", users.RefreshToken).Methods("POST")
+		usersGroup.POST("/refresh-token", users.RefreshToken)
+	}
 
-	myRouter.HandleFunc("/me", users.Me).Methods("GET", "OPTIONS")
 
-	// ========================
-
-	// Entry API routes
 	myRouter.HandleFunc("/retrieve-entries-within-visible-bounds", func(w http.ResponseWriter, r *http.Request) {
 		entry.RetrieveEntriesWithinVisibleBounds(w, r, db)
 	}).Methods("POST")
@@ -130,7 +126,6 @@ func main() {
 	var err error
 	db, err = initDB()
 
-	// retry connection to the database 10 times with a 2-second delay
 	for i := 0; i < 10 && err != nil; i++ {
 		log.Printf("Failed to connect to DB, attempt %d: %v", i+1, err)
 		time.Sleep(2 * time.Second)
