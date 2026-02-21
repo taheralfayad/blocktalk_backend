@@ -2,10 +2,6 @@ package users
 
 import (
 	"database/sql"
-	"encoding/json"
-	"net/http"
-	"strconv"
-	"fmt"
 	"errors"
 
 	"github.com/gin-gonic/gin"
@@ -126,33 +122,44 @@ func LoginUser(c *gin.Context ,db *sql.DB) {
 }
 
 func RefreshToken(c *gin.Context) {
-
-	token, err := jwt.Parse(c.Cookie("refresh_token"), func(token *jwt.Token) (interface{}, error) {
-			return utils.JwtSecret, nil
-	})
-
+	refreshToken, err := c.Cookie("refresh_token")
 	if err != nil {
-			messages.StatusUnauthorized(c, err)
-			return
-	}
-
-	claims := token.Claims.(jwt.MapClaims)
-	username := claims["username"].(string)
-
-	newAccessToken, expirationDate, err := utils.GenerateAccessToken(username)
-
-	if err != nil {
-		messages.StatusInternalServerError(c, err)
+		messages.StatusUnauthorized(c, err)
 		return
 	}
 
-	utils.setAuthCookie(
+	token, err := jwt.Parse(refreshToken, func(token *jwt.Token) (interface{}, error) {
+		return utils.JwtSecret, nil
+	})
+	if err != nil {
+		messages.StatusUnauthorized(c, err)
+		return
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		messages.StatusUnauthorized(c, errors.New("invalid token claims"))
+		return
+	}
+
+	username, ok := claims["username"].(string)
+	if !ok {
+		messages.StatusUnauthorized(c, errors.New("invalid username in token"))
+		return
+	}
+
+	newAccessToken, expirationDate, err := utils.GenerateAccessToken(username)
+	if err != nil {
+		messages.InternalServerError(c, err)
+		return
+	}
+
+	utils.SetAuthCookie(
 		c,
 		"access_token",
 		newAccessToken,
-		expirationDate,
+		int(expirationDate),
 	)
 
 	messages.StatusOk(c, "Access token has been refreshed!")
 }
-

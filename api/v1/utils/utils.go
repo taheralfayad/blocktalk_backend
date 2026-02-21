@@ -182,23 +182,23 @@ func SetCookies(
 	refreshTokenExpDate int,
 ) {
 
-	setAuthCookie(
+	SetAuthCookie(
 		c,
 		"refresh_token",
 		refreshToken,
 		refreshTokenExpDate,
 	)
 
-	setAuthCookie(
+	SetAuthCookie(
 		c,
 		"accessToken",
 		accessToken,
-		accessTokenExpDate
+		accessTokenExpDate,
 	)
 
 }
 
-func setAuthCookie(
+func SetAuthCookie(
 	c *gin.Context,
 	tokenType string,
 	token string,
