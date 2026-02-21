@@ -10,98 +10,55 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/gorilla/mux"
-	"github.com/gorilla/handlers"
+	"github.com/gin-gonic/gin"
+	"github.com/gin-contrib/cors"
 
 	comments "backend/api/v1/comments"
 	entry "backend/api/v1/entry"
 	users "backend/api/v1/users"
 	utils "backend/api/v1/utils"
+	messages "backend/api/v1/messages"
 )
-
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
 
 var db *sql.DB
 
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
+func validateToken() gin.HandlerFunc {
+	return func(c *gin.Context) {
 
-func loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		wrapped := &responseWriter{
-			ResponseWriter: w,
-			statusCode:     http.StatusOK,
-		}
-
-		log.Printf("Started %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
-
-		next.ServeHTTP(wrapped, r)
-
-		log.Printf("Completed %s %s with status %d in %v",
-			r.Method, r.URL.Path, wrapped.statusCode, time.Since(start))
-	})
-}
-
-func validateToken(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-		fmt.Println("Validating token for request:", r.URL.Path)
-
-		skipPaths := map[string]bool{
-			"/create-user":              true,
-			"/login":                    true,
-			"/refresh-token":            true,
-			"/feed":                     true,
-			"/retrieve-city":            true,
-			"/retrieve-entry":           true,
-			"/retrieve-comments":        true,
-			"/retrieve-comment-replies": true,
-			"/retrieve-tags":            true,
-			"/retrieve-entries-within-visible-bounds": true,
-		}
-
-		if skipPaths[r.URL.Path] {
-			next.ServeHTTP(w, r)
+		cookie, err := c.Cookie("access_token")
+		if err != nil {
+			messages.StatusUnauthorized(c, err)
 			return
 		}
 
-		authToken := r.Header.Get("Authorization")
-
-		log.Printf("Received token: %s", authToken)
-
-		if authToken == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		token, err := jwt.Parse(authToken, func(token *jwt.Token) (interface{}, error) {
+		token, err := jwt.Parse(cookie, func(token *jwt.Token) (interface{}, error) {
 			return utils.JwtSecret, nil
 		})
 
 		if err != nil || !token.Valid {
 			log.Printf("Invalid token: %v", err)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			messages.StatusUnauthorized(c, err)
 			return
 		}
 
-		next.ServeHTTP(w, r)
-	})
+		c.Next()
+	}
 }
 
 func handleRequests() {
-	myRouter := mux.NewRouter().StrictSlash(true)
+	r := gin.Default()
 
-	myRouter.Use(loggingMiddleware)
-	myRouter.Use(validateToken)
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:5173"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept"},
+		AllowCredentials: true,
+	}))
 
-	// User API routes
+	r.POST("/create-user", func(c *gin.Context) {
+		users.CreateUser(c, db)
+	})
+
 	myRouter.HandleFunc("/create-user", func(w http.ResponseWriter, r *http.Request) {
 		users.CreateUser(w, r, db)
 	}).Methods("POST", "OPTIONS")
@@ -111,6 +68,8 @@ func handleRequests() {
 	}).Methods("POST")
 
 	myRouter.HandleFunc("/refresh-token", users.RefreshToken).Methods("POST")
+
+	myRouter.HandleFunc("/me", users.Me).Methods("GET", "OPTIONS")
 
 	// ========================
 

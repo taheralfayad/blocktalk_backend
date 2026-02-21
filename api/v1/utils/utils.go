@@ -9,7 +9,9 @@ import (
 
 	structs "backend/api/v1/structs"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var JwtSecret = []byte(os.Getenv("JWT_SECRET"))
@@ -26,13 +28,15 @@ func GenerateAccessToken(username string) (string, int64, error) {
 	return signedToken, expirationTime, err
 }
 
-func GenerateRefreshToken(username string) (string, error) {
+func GenerateRefreshToken(username string) (string, int64, error) {
+	expirationTime := time.Now().Add(30 * 24 * time.Hour).Unix()
 	claims := jwt.MapClaims{
 		"username": username,
-		"exp":      time.Now().Add(30 * 24 * time.Hour).Unix(), // 30 days expiration
+		"exp":      expirationTime,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(JwtSecret)
+	signedToken, err := token.SignedString(JwtSecret)
+	return signedToken, expirationTime, err
 }
 
 func ParseTokenAndReturnUsername(tokenString string) (string, error) {
@@ -155,4 +159,60 @@ func RetrieveCurrentInteractionTypeForTable(
 	}
 
 	return currentInteractionType
+}
+
+func HashPassword(password string) (string, error) {
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashedPassword), nil
+}
+
+func VerifyPassword(hashedPassword, password string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+	return err == nil
+}
+
+func SetCookies(
+	c *gin.Context,
+	accessToken string,
+	refreshToken string,
+	accessTokenExpDate int,
+	refreshTokenExpDate int,
+) {
+
+	setAuthCookie(
+		c,
+		"refresh_token",
+		refreshToken,
+		refreshTokenExpDate,
+	)
+
+	setAuthCookie(
+		c,
+		"accessToken",
+		accessToken,
+		accessTokenExpDate
+	)
+
+}
+
+func setAuthCookie(
+	c *gin.Context,
+	tokenType string,
+	token string,
+	tokenExpDate int,
+) {
+
+	c.SetCookie(
+		tokenType,
+		token,
+		tokenExpDate,
+		"/",
+		"",
+		true,
+		true,
+	)
+
 }
