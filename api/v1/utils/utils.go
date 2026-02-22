@@ -3,7 +3,6 @@ package utils
 import (
 	"database/sql"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -66,12 +65,11 @@ func ParseTokenAndReturnUsername(tokenString string) (string, error) {
 	return username, nil
 }
 
-func VerifyTokenAndReturnUsername(r *http.Request) (string, error) {
-	tokenString := r.Header.Get("Authorization")
-	if tokenString == "" {
+func VerifyTokenAndReturnUsername(token string) (string, error) {
+	if token == "" {
 		return "", fmt.Errorf("authorization header missing")
 	}
-	return ParseTokenAndReturnUsername(tokenString)
+	return ParseTokenAndReturnUsername(token)
 }
 
 func InsertTagAndEntryRevisionAssociation(tx *sql.Tx, entryRevisionId int, tags []structs.Tag) error {
@@ -181,7 +179,6 @@ func SetCookies(
 	accessTokenExpDate int,
 	refreshTokenExpDate int,
 ) {
-
 	SetAuthCookie(
 		c,
 		"refresh_token",
@@ -195,7 +192,6 @@ func SetCookies(
 		accessToken,
 		accessTokenExpDate,
 	)
-
 }
 
 func SetAuthCookie(
@@ -204,7 +200,6 @@ func SetAuthCookie(
 	token string,
 	tokenExpDate int,
 ) {
-
 	c.SetCookie(
 		tokenType,
 		token,
@@ -214,5 +209,4 @@ func SetAuthCookie(
 		true,
 		true,
 	)
-
 }

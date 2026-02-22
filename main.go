@@ -2,29 +2,25 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
-	"net/http"
 	"time"
 
 	_ "github.com/lib/pq"
 
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/gin-gonic/gin"
 	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 
-	comments "backend/api/v1/comments"
 	entry "backend/api/v1/entry"
+	messages "backend/api/v1/messages"
 	users "backend/api/v1/users"
 	utils "backend/api/v1/utils"
-	messages "backend/api/v1/messages"
 )
 
 var db *sql.DB
 
-func validateToken() gin.HandlerFunc {
+func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-
 		cookie, err := c.Cookie("access_token")
 		if err != nil {
 			messages.StatusUnauthorized(c, err)
@@ -55,71 +51,50 @@ func handleRequests() {
 		AllowCredentials: true,
 	}))
 
-	usersGroup := r.Group("/users")
+	userRoutes := r.Group("/users")
+	entryRoutes := r.Group("/entries")
+	entryPrivilegedRoutes := r.Group("/entries")
+	entryPrivilegedRoutes.Use(AuthMiddleware())
 
-	{
-		usersGroup.POST("/create-user", func(c *gin.Context) {
-			users.CreateUser(c, db)
-		})
-
-		usersGroup.POST("/login", func(c *gin.Context) {
-			users.LoginUser(c, db)
-		})
-
-		usersGroup.POST("/refresh-token", users.RefreshToken)
-	}
-
-
-	myRouter.HandleFunc("/retrieve-entries-within-visible-bounds", func(w http.ResponseWriter, r *http.Request) {
-		entry.RetrieveEntriesWithinVisibleBounds(w, r, db)
-	}).Methods("POST")
-	myRouter.HandleFunc("/create-entry", func(w http.ResponseWriter, r *http.Request) {
-		entry.CreateEntry(w, r, db)
-	}).Methods("POST")
-	myRouter.HandleFunc("/autocomplete-address", entry.AutocompleteAddress).Methods("GET")
-	myRouter.HandleFunc("/retrieve-city", entry.RetrieveCity).Methods("GET")
-	myRouter.HandleFunc("/feed", func(w http.ResponseWriter, r *http.Request) {
-		entry.RetrieveFeed(w, r, db)
-	}).Methods("GET")
-	myRouter.HandleFunc("/retrieve-entry", func(w http.ResponseWriter, r *http.Request) {
-		entry.RetrieveEntry(w, r, db)
-	}).Methods("GET")
-	myRouter.HandleFunc("/vote-entry", func(w http.ResponseWriter, r *http.Request) {
-		entry.VoteEntry(w, r, db)
-	}).Methods("POST")
-	myRouter.HandleFunc("/edit-entry", func(w http.ResponseWriter, r *http.Request) {
-		entry.EditEntry(w, r, db)
+	userRoutes.POST("/create-user", func(c *gin.Context) {
+		users.CreateUser(c, db)
 	})
 
-	// =========================
-
-	// Comment API routes
-	myRouter.HandleFunc("/add-comment", func(w http.ResponseWriter, r *http.Request) {
-		comments.AddComment(w, r, db)
-	}).Methods("POST")
-	myRouter.HandleFunc("/retrieve-comments", func(w http.ResponseWriter, r *http.Request) {
-		comments.GetEntryComments(w, r, db)
-	}).Methods("GET")
-	myRouter.HandleFunc("/retrieve-comment-replies", func(w http.ResponseWriter, r *http.Request) {
-		comments.GetCommentReplies(w, r, db)
-	}).Methods("GET")
-	myRouter.HandleFunc("/vote-on-comment", func(w http.ResponseWriter, r *http.Request) {
-		comments.VoteOnComment(w, r, db)
+	userRoutes.POST("/login", func(c *gin.Context) {
+		users.LoginUser(c, db)
 	})
 
-	headersOk := handlers.AllowedHeaders([]string{
-		"X-Requested-With",
-		"Content-Type",
-		"Authorization",
-		"Accept",
-		"Origin",
+	userRoutes.POST("/refresh-token", users.RefreshToken)
+
+	entryRoutes.POST("/retrieve-entries-within-visible-bounds", func(c *gin.Context) {
+		entry.RetrieveEntriesWithinVisibleBounds(c, db)
 	})
-	originsOk := handlers.AllowedOrigins([]string{"http://localhost:5173"})
-	methodsOk := handlers.AllowedMethods([]string{"GET", "HEAD", "POST", "PUT", "OPTIONS"})
 
-	log.Println("Server starting on :8080")
-	log.Fatal(http.ListenAndServe(":8080", handlers.CORS(originsOk, headersOk, methodsOk)(myRouter)))
+	entryRoutes.GET("/retrieve-city", func(c *gin.Context) {
+		entry.RetrieveCity(c, db)
+	})
 
+	entryRoutes.GET("/feed", func(c *gin.Context) {
+		entry.RetrieveFeed(c, db)
+	})
+
+	entryPrivilegedRoutes.POST("/create-entry", func(c *gin.Context) {
+		entry.CreateEntry(c, db)
+	})
+
+	entryPrivilegedRoutes.GET("/autocomplete-address", func(c *gin.Context) {
+		entry.AutocompleteAddress(c, db)
+	})
+
+	entryPrivilegedRoutes.POST("/vote-entry", func(c *gin.Context) {
+		entry.VoteEntry(c, db)
+	})
+
+	entryPrivilegedRoutes.POST("/edit-entry", func(c *gin.Context) {
+		entry.EditEntry(c, db)
+	})
+
+	r.Run()
 }
 
 func main() {
