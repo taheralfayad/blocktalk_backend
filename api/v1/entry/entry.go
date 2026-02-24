@@ -274,8 +274,9 @@ func RetrieveEntriesWithinVisibleBounds(c *gin.Context, db *sql.DB) {
 func RetrieveCity(c *gin.Context, db *sql.DB) {
 	query := c.DefaultQuery("city", "")
 
-	if query != "" {
+	if query == "" {
 		messages.StatusBadRequest(c, errors.New("City not found"))
+		return
 	}
 
 	var cities []data.City
