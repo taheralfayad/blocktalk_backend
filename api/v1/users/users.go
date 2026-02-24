@@ -3,6 +3,7 @@ package users
 import (
 	"database/sql"
 	"errors"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -154,4 +155,10 @@ func RefreshToken(c *gin.Context) {
 	)
 
 	messages.StatusOk(c, "Access token has been refreshed!")
+}
+
+func Me(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"message": "ok buddy come on in",
+	})
 }

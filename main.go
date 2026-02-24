@@ -52,6 +52,7 @@ func handleRequests() {
 	}))
 
 	userRoutes := r.Group("/users")
+	userRoutesPrivileged := r.Group("/users")
 	entryRoutes := r.Group("/entries")
 	entryPrivilegedRoutes := r.Group("/entries")
 	entryPrivilegedRoutes.Use(AuthMiddleware())
@@ -65,6 +66,8 @@ func handleRequests() {
 	})
 
 	userRoutes.POST("/refresh-token", users.RefreshToken)
+
+	userRoutesPrivileged.GET("/me", users.Me)
 
 	entryRoutes.POST("/retrieve-entries-within-visible-bounds", func(c *gin.Context) {
 		entry.RetrieveEntriesWithinVisibleBounds(c, db)
