@@ -53,6 +53,7 @@ func handleRequests() {
 
 	userRoutes := r.Group("/users")
 	userRoutesPrivileged := r.Group("/users")
+	userRoutesPrivileged.Use(AuthMiddleware())
 	entryRoutes := r.Group("/entries")
 	entryPrivilegedRoutes := r.Group("/entries")
 	entryPrivilegedRoutes.Use(AuthMiddleware())
