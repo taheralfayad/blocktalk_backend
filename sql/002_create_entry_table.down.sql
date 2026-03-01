@@ -1,3 +1,0 @@
---- down
-
-DROP TABLE entry;

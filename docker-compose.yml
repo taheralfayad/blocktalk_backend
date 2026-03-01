@@ -1,10 +1,10 @@
 services:
-  web:
-    build: .
+  backend:
+    build: ./backend/
     ports: 
       - "8080:8080"
     volumes:
-      - .:/app
+      - ./backend/:/app
     command: ["air"]
     depends_on:
       - database
@@ -22,6 +22,16 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    env_file:
+      - .env
 
 volumes:
   postgres_data:
